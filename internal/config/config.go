@@ -220,6 +220,13 @@ func SearchBases() []string {
 	if home, err := os.UserHomeDir(); err == nil {
 		add(home, "AppData", "Roaming", "DingTalk")
 		add(home, "Library", "Application Support", "DingTalk")
+		// macOS: the client stores data under "DingTalkMac", and the sandboxed
+		// build keeps it inside its container (<TeamID>.com.dingtalk.mac).
+		add(home, "Library", "Application Support", "DingTalkMac")
+		containers, _ := filepath.Glob(filepath.Join(home, "Library", "Containers", "*com.dingtalk.mac"))
+		for _, c := range containers {
+			add(c, "Data", "Library", "Application Support", "DingTalkMac")
+		}
 		add(home, ".config", "DingTalk")
 	}
 	seen := map[string]bool{}
