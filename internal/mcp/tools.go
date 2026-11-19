@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"dingtalk-agent/internal/agentdb"
-	"dingtalk-agent/internal/analysis"
-	"dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/agentdb"
+	"github.com/qqshow/dingtalk-agent/internal/analysis"
+	"github.com/qqshow/dingtalk-agent/internal/store"
 )
 
 type Tool struct {

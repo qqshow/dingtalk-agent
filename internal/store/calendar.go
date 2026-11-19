@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/sqlitex"
+	"github.com/qqshow/dingtalk-agent/internal/sqlitex"
 )
 
 // Event is one calendar entry (meeting, approval todo, AI minutes, task).

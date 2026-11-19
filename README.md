@@ -34,7 +34,12 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 ## 快速开始
 
-1. 从 Releases 下载 `dingtalk-agent.exe`，或[从源码构建](#开发)
+1. 从 [Releases](https://github.com/qqshow/dingtalk-agent/releases) 下载 `dingtalk-agent.exe`，或用 Go 安装（需要 Go 1.26+）：
+
+   ```bash
+   go install github.com/qqshow/dingtalk-agent@latest
+   ```
+
 2. 运行：
 
    ```powershell
@@ -203,7 +208,7 @@ data/
 需要 Go 1.26 或更高版本。
 
 ```bash
-git clone https://github.com/<you>/dingtalk-agent.git
+git clone https://github.com/qqshow/dingtalk-agent.git
 cd dingtalk-agent
 go build -ldflags "-s -w" -o dingtalk-agent.exe .   # Linux/macOS 下可去掉 .exe 后缀
 go test ./...

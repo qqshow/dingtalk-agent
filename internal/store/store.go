@@ -20,8 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"dingtalk-agent/internal/config"
-	"dingtalk-agent/internal/sqlitex"
+	"github.com/qqshow/dingtalk-agent/internal/config"
+	"github.com/qqshow/dingtalk-agent/internal/sqlitex"
 )
 
 // ErrNoData is returned before the first successful sync.

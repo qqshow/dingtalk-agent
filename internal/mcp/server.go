@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"dingtalk-agent/internal/app"
+	"github.com/qqshow/dingtalk-agent/internal/app"
 )
 
 var supportedVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}

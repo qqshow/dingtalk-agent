@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/store"
 )
 
 type Report struct {

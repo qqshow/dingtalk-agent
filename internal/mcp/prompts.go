@@ -3,7 +3,7 @@ package mcp
 import (
 	"strings"
 
-	"dingtalk-agent/internal/analysis"
+	"github.com/qqshow/dingtalk-agent/internal/analysis"
 )
 
 type PromptArg struct {

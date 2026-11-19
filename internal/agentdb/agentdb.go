@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/sqlitex"
+	"github.com/qqshow/dingtalk-agent/internal/sqlitex"
 )
 
 type DB struct{ db *sql.DB }

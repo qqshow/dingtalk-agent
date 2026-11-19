@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/agentdb"
-	"dingtalk-agent/internal/analysis"
-	"dingtalk-agent/internal/app"
-	"dingtalk-agent/internal/export"
-	"dingtalk-agent/internal/store"
-	"dingtalk-agent/internal/syncer"
+	"github.com/qqshow/dingtalk-agent/internal/agentdb"
+	"github.com/qqshow/dingtalk-agent/internal/analysis"
+	"github.com/qqshow/dingtalk-agent/internal/app"
+	"github.com/qqshow/dingtalk-agent/internal/export"
+	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/syncer"
 )
 
 //go:embed static

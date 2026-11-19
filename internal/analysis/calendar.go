@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/store"
 )
 
 // CalendarSection is the calendar part of the daily report.

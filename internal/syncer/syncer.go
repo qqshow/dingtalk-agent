@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"dingtalk-agent/internal/config"
-	"dingtalk-agent/internal/decrypt"
-	"dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/config"
+	"github.com/qqshow/dingtalk-agent/internal/decrypt"
+	"github.com/qqshow/dingtalk-agent/internal/store"
 )
 
 // State is persisted to data/sync_state.json. Field names match the

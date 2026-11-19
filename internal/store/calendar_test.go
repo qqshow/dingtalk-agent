@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"dingtalk-agent/internal/sqlitex"
+	"github.com/qqshow/dingtalk-agent/internal/sqlitex"
 )
 
 func TestEventsAllDayAndStatus(t *testing.T) {

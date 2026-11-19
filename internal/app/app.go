@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"time"
 
-	"dingtalk-agent/internal/agentdb"
-	"dingtalk-agent/internal/analysis"
-	"dingtalk-agent/internal/config"
-	"dingtalk-agent/internal/export"
-	"dingtalk-agent/internal/store"
-	"dingtalk-agent/internal/syncer"
+	"github.com/qqshow/dingtalk-agent/internal/agentdb"
+	"github.com/qqshow/dingtalk-agent/internal/analysis"
+	"github.com/qqshow/dingtalk-agent/internal/config"
+	"github.com/qqshow/dingtalk-agent/internal/export"
+	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/syncer"
 )
 
 type App struct {

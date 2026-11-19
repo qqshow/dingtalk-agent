@@ -1,4 +1,4 @@
-module dingtalk-agent
+module github.com/qqshow/dingtalk-agent
 
 go 1.26.0
 

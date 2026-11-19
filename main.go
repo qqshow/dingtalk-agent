@@ -20,12 +20,12 @@ import (
 	"syscall"
 	"time"
 
-	"dingtalk-agent/internal/analysis"
-	"dingtalk-agent/internal/app"
-	"dingtalk-agent/internal/config"
-	"dingtalk-agent/internal/decrypt"
-	"dingtalk-agent/internal/mcp"
-	"dingtalk-agent/internal/web"
+	"github.com/qqshow/dingtalk-agent/internal/analysis"
+	"github.com/qqshow/dingtalk-agent/internal/app"
+	"github.com/qqshow/dingtalk-agent/internal/config"
+	"github.com/qqshow/dingtalk-agent/internal/decrypt"
+	"github.com/qqshow/dingtalk-agent/internal/mcp"
+	"github.com/qqshow/dingtalk-agent/internal/web"
 )
 
 var version = "1.0.0"

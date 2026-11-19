@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/sqlitex"
+	"github.com/qqshow/dingtalk-agent/internal/sqlitex"
 )
 
 const (

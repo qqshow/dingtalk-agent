@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"dingtalk-agent/internal/sqlitex"
+	"github.com/qqshow/dingtalk-agent/internal/sqlitex"
 )
 
 // Content types seen in DingTalk messages.
