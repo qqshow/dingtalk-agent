@@ -26,6 +26,29 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 支持浅色和深色主题（默认跟随系统）。
 
+## 截图
+
+> 截图使用虚构的演示数据，人物、公司和聊天内容均为虚构。
+
+**消息**：会话列表与聊天记录，支持图片、文件、引用和 @ 高亮（深色主题）
+
+![消息](docs/screenshots/chat.png)
+
+**工作台**：每日统计、AI 日报与重点关注、日程、待办（浅色主题）
+
+![工作台](docs/screenshots/dashboard.png)
+
+<table>
+  <tr>
+    <td width="50%"><b>待办</b>：AI 提取的待办与待跟踪事项<br><img src="docs/screenshots/todos.png" alt="待办"></td>
+    <td width="50%"><b>日程</b>：钉钉日历月视图<br><img src="docs/screenshots/calendar.png" alt="日程"></td>
+  </tr>
+  <tr>
+    <td width="50%"><b>搜索</b>：全量聊天记录关键字搜索<br><img src="docs/screenshots/search.png" alt="搜索"></td>
+    <td width="50%"><b>设置</b>：同步频率与 Agent 接入信息<br><img src="docs/screenshots/settings.png" alt="设置"></td>
+  </tr>
+</table>
+
 ## 环境要求
 
 - **钉钉桌面版（新版）**：账号数据目录形如 `%APPDATA%\DingTalk\<hash>_v3`，需要至少登录过一次
