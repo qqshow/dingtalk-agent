@@ -1,0 +1,16 @@
+# Runtime data: decrypted chat history, logs, config with your UID — never commit.
+/data/
+
+# Build output
+/dingtalk-agent
+/dingtalk-agent.exe
+/dist/
+*.exe
+*.test
+*.out
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
