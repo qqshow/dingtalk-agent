@@ -55,7 +55,7 @@ func main() {
 	var o config.Overrides
 	var syncMin int
 	fs.StringVar(&o.DataDir, "data", "", "数据目录（默认: 程序所在目录/data）")
-	fs.StringVar(&o.DingTalkDir, "dingtalk-dir", "", "钉钉账号目录 ...\\DingTalk\\<hash>_v3（默认自动查找）")
+	fs.StringVar(&o.DingTalkDir, "dingtalk-dir", "", "钉钉账号目录，以 <hash>_v3 结尾（默认自动查找）")
 	fs.StringVar(&o.UID, "uid", "", "真实数字 UID（默认从钉钉日志自动识别）")
 	fs.StringVar(&o.Host, "host", "", "监听地址（默认 127.0.0.1）")
 	fs.IntVar(&o.Port, "port", 0, "监听端口（默认 8090）")

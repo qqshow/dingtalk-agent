@@ -51,25 +51,66 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 ## 环境要求
 
-- **钉钉桌面版（新版）**：账号数据目录形如 `%APPDATA%\DingTalk\<hash>_v3`，需要至少登录过一次
-- **操作系统**：Windows（已测试）。macOS / Linux 也会自动查找钉钉数据目录，但尚未测试
+- **钉钉桌面版（新版）**：账号数据目录名形如 `<hash>_v3`，需要至少登录过一次
+  - Windows：`%APPDATA%\DingTalk\<hash>_v3`
+  - macOS：`~/Library/Containers/<TeamID>.com.dingtalk.mac/Data/Library/Application Support/DingTalkMac/<hash>_v3`
+- **操作系统**：Windows 和 macOS（均已测试）。Linux 也会尝试查找钉钉数据目录，但尚未测试
 - 旧版 `*_v2` 数据库暂不支持
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/qqshow/dingtalk-agent/releases) 下载 `dingtalk-agent.exe`，或用 Go 安装（需要 Go 1.26+）：
+从 [Releases](https://github.com/qqshow/dingtalk-agent/releases) 下载对应平台的文件：
 
-   ```bash
-   go install github.com/qqshow/dingtalk-agent@latest
-   ```
+| 平台 | 文件 |
+|---|---|
+| Windows（x64） | `dingtalk-agent-windows-amd64.exe` |
+| Windows（ARM） | `dingtalk-agent-windows-arm64.exe` |
+| macOS（Apple 芯片） | `dingtalk-agent-darwin-arm64.tar.gz` |
+| macOS（Intel） | `dingtalk-agent-darwin-amd64.tar.gz` |
 
-2. 运行：
+也可以用 Go 安装（需要 Go 1.26+）：`go install github.com/qqshow/dingtalk-agent@latest`
+
+### Windows
+
+1. 运行下载的程序（文件名可以改成 `dingtalk-agent.exe`）：
 
    ```powershell
-   .\dingtalk-agent.exe
+   .\dingtalk-agent-windows-amd64.exe
    ```
 
-3. 打开 <http://localhost:8090>
+2. 打开 <http://localhost:8090>
+
+### macOS
+
+1. 解压，并去掉浏览器下载时附加的隔离标记（程序没有 Apple 签名，不去掉会被系统拦截）：
+
+   ```bash
+   tar -xzf dingtalk-agent-darwin-arm64.tar.gz
+   cd dingtalk-agent-darwin-arm64
+   xattr -d com.apple.quarantine dingtalk-agent
+   ```
+
+2. 给终端授予「完全磁盘访问权限」。钉钉的数据在它自己的沙盒容器里，macOS 默认不允许其他程序读取：
+
+   打开 **系统设置 → 隐私与安全性 → 完全磁盘访问权限**，添加并打开你使用的终端（终端、iTerm 等），然后**完全退出并重新打开终端**。
+
+3. 运行：
+
+   ```bash
+   ./dingtalk-agent
+   ```
+
+4. 打开 <http://localhost:8090>
+
+如果启动时提示 `no DingTalk V3 account found`，通常是第 2 步的权限没有生效。可以用下面的命令确认，能列出目录就说明权限正常：
+
+```bash
+ls ~/Library/Containers/*com.dingtalk.mac/Data
+```
+
+通过 Claude Code 以 stdio 方式启动 MCP 时，读取权限同样来自运行 Claude Code 的那个终端。
+
+### 首次启动
 
 首次启动时，程序会自动查找钉钉账号目录，从钉钉客户端日志中识别你的数字 UID（并用数据库文件头验证），然后完成解密。
 之后默认每 30 分钟自动同步一次，可在网页的 **设置** 页修改。
@@ -92,7 +133,7 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 | `-host` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 会把聊天记录暴露到局域网，请谨慎 |
 | `-sync-interval` | `30` | 自动同步间隔（分钟，`0` 表示关闭）。指定后会覆盖网页上的设置 |
 | `-uid` | 自动识别 | 钉钉数字 UID |
-| `-dingtalk-dir` | 自动查找 | 账号目录 `...\DingTalk\<hash>_v3` |
+| `-dingtalk-dir` | 自动查找 | 账号目录，以 `<hash>_v3` 结尾 |
 | `-data` | `<程序目录>/data` | 本地数据目录 |
 
 以上设置也可以写在 `data/config.json`（首次运行时自动生成）：
@@ -189,8 +230,11 @@ PUT    /api/settings                         {"sync_interval_minutes":10}
 ## 常见问题
 
 **提示无法确定 UID？**
-程序会从钉钉日志（`%APPDATA%\DingTalk\log\`）中查找 UID。如果日志已被清理，可以在日志里搜索 `real_uid=` 找到自己的数字 UID，
+程序会从钉钉日志（Windows 为 `%APPDATA%\DingTalk\log\`，macOS 为 `DingTalkMac/log/`）中查找 UID。如果日志已被清理，可以在日志里搜索 `real_uid=` 找到自己的数字 UID，
 再通过 `-uid` 参数或 `data/config.json` 指定。注意：V3 账号目录名中的那串字符是哈希值，不是 UID。
+
+**电脑上登录过多个钉钉账号？**
+程序默认选择最近有更新的那个 `*_v3` 账号。要指定其他账号，用 `-dingtalk-dir` 参数或在 `data/config.json` 中设置 `dingtalk_dir`。
 
 **图片模糊，或标着"缩略图"？**
 钉钉只会为你在客户端里点开看过的图片下载原图，其余图片本地只有 720px 的缩略图。在钉钉中点开那张图片，再点一次"同步"即可看到原图。
@@ -236,6 +280,8 @@ cd dingtalk-agent
 go build -ldflags "-s -w" -o dingtalk-agent.exe .   # Linux/macOS 下可去掉 .exe 后缀
 go test ./...
 ```
+
+推送到 `main` 或提交 PR 时，GitHub Actions 会运行测试并构建 Windows 和 macOS 程序；推送 `v*` 标签会自动发布 Release。
 
 项目结构：
 
