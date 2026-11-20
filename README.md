@@ -63,8 +63,8 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 | 平台 | 文件 |
 |---|---|
-| Windows（x64） | `dingtalk-agent-windows-amd64.exe` |
-| Windows（ARM） | `dingtalk-agent-windows-arm64.exe` |
+| Windows（x64） | `dingtalk-agent-windows-amd64.zip` |
+| Windows（ARM） | `dingtalk-agent-windows-arm64.zip` |
 | macOS（Apple 芯片） | `dingtalk-agent-darwin-arm64.tar.gz` |
 | macOS（Intel） | `dingtalk-agent-darwin-amd64.tar.gz` |
 
@@ -72,10 +72,10 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 ### Windows
 
-1. 运行下载的程序（文件名可以改成 `dingtalk-agent.exe`）：
+1. 解压 zip，进入解压出的目录后运行：
 
    ```powershell
-   .\dingtalk-agent-windows-amd64.exe
+   .\dingtalk-agent.exe
    ```
 
 2. 打开 <http://localhost:8090>

@@ -64,22 +64,24 @@ jobs:
             echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
 
-      # Windows ships as a bare .exe; macOS ships as a .tar.gz so the
-      # executable bit survives the download.
+      # Each platform ships as an archive holding the program plus license
+      # files: .zip for Windows (a bare .exe download tends to be flagged by
+      # browsers and security software), .tar.gz for macOS so the executable
+      # bit survives the download.
       - name: Build
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           name="dingtalk-agent-${GOOS}-${GOARCH}"
-          flags="-s -w -X main.version=${VERSION}"
-          mkdir -p dist
+          bin="dingtalk-agent"
+          if [[ "$GOOS" == "windows" ]]; then bin="dingtalk-agent.exe"; fi
+          mkdir -p dist "build/${name}"
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "build/${name}/${bin}" .
+          cp LICENSE THIRD_PARTY_NOTICES.md README.md "build/${name}/"
           if [[ "$GOOS" == "windows" ]]; then
-            go build -trimpath -ldflags "$flags" -o "dist/${name}.exe" .
+            (cd build && zip -r -9 "../dist/${name}.zip" "${name}")
           else
-            mkdir -p "build/${name}"
-            go build -trimpath -ldflags "$flags" -o "build/${name}/dingtalk-agent" .
-            cp LICENSE THIRD_PARTY_NOTICES.md README.md "build/${name}/"
             tar -C build -czf "dist/${name}.tar.gz" "${name}"
           fi
           ls -l dist
