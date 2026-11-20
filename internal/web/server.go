@@ -19,6 +19,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/agentdb"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/app"
+	"github.com/qqshow/dingtalk-agent/internal/config"
 	"github.com/qqshow/dingtalk-agent/internal/export"
 	"github.com/qqshow/dingtalk-agent/internal/store"
 	"github.com/qqshow/dingtalk-agent/internal/syncer"
@@ -237,7 +238,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"accounts": []map[string]any{{
-			"uid": uid, "display_name": name, "version": "v3", "active": true, "supported": true,
+			"uid": uid, "display_name": name, "version": config.AccountVersion(s.a.Cfg.DingTalkDir()), "active": true, "supported": true,
 			"data_dir": s.a.Cfg.DingTalkDir(),
 		}},
 		"active_uid": uid,
@@ -245,7 +246,7 @@ func (s *Server) apiAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiSelectAccount(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, http.StatusBadRequest, errors.New("only the active V3 account is supported; set uid/dingtalk_dir in data/config.json to change it"))
+	writeErr(w, http.StatusBadRequest, errors.New("only the active account is supported; set uid/dingtalk_dir in data/config.json to change it"))
 }
 
 func (s *Server) apiConversations(w http.ResponseWriter, r *http.Request) {

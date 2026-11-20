@@ -1,4 +1,4 @@
-// dingtalk-agent: decrypts the local DingTalk (V3) chat database and exposes
+// dingtalk-agent: decrypts the local DingTalk (V2/V3) chat database and exposes
 // it through an embedded web UI, a REST API and an MCP server for agents.
 package main
 
@@ -30,7 +30,7 @@ import (
 
 var version = "1.0.0"
 
-const usage = `dingtalk-agent %s — 钉钉聊天记录（V3）解密 / 浏览 / Agent 接口
+const usage = `dingtalk-agent %s — 钉钉聊天记录（V2/V3）解密 / 浏览 / Agent 接口
 
 用法:
   dingtalk-agent [serve] [flags]     启动网页 + REST API + MCP(HTTP /mcp)，默认命令
@@ -55,7 +55,7 @@ func main() {
 	var o config.Overrides
 	var syncMin int
 	fs.StringVar(&o.DataDir, "data", "", "数据目录（默认: 程序所在目录/data）")
-	fs.StringVar(&o.DingTalkDir, "dingtalk-dir", "", "钉钉账号目录，以 <hash>_v3 结尾（默认自动查找）")
+	fs.StringVar(&o.DingTalkDir, "dingtalk-dir", "", "钉钉账号目录，以 <hash>_v3 或 <uid>_v2 结尾（默认自动查找）")
 	fs.StringVar(&o.UID, "uid", "", "真实数字 UID（默认从钉钉日志自动识别）")
 	fs.StringVar(&o.Host, "host", "", "监听地址（默认 127.0.0.1）")
 	fs.IntVar(&o.Port, "port", 0, "监听端口（默认 8090）")

@@ -3,11 +3,11 @@
 > 让 AI Agent 读懂你的钉钉：本地解密钉钉桌面版聊天记录与日程，提供 **网页 + REST API + MCP**，
 > 用于每日工作总结、互动统计、项目跟踪，并自动整理待办和待跟踪事项。
 
-*Decrypt your own DingTalk desktop (V3) chat history and calendar locally, browse it in an embedded web UI,
+*Decrypt your own DingTalk desktop (V2/V3) chat history and calendar locally, browse it in an embedded web UI,
 and expose it to AI agents via REST and MCP for daily summaries and auto-generated to-dos.*
 
 - **单文件，零依赖**：一个可执行文件，网页已内嵌；纯 Go 实现（含 SQLite），不需要 Python、CGO 或第三方解密工具
-- **原生 V3 解密**：PBKDF2 + AES-ECB，正确处理 WAL；聊天记录和日历一次完整解密约 2 秒
+- **原生解密，支持 V2 / V3**：AES-ECB，正确处理 WAL；聊天记录和日历一次完整解密约 2 秒
 - **为 Agent 设计**：结构化日报统计、按重要程度排序的消息摘要、日程，以及可写回的总结和待办
 - **数据只在本机**：只读访问钉钉数据；默认只监听 `127.0.0.1`，并拦截跨站和 DNS rebinding 访问；没有任何外部网络请求
 
@@ -51,11 +51,13 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 ## 环境要求
 
-- **钉钉桌面版（新版）**：账号数据目录名形如 `<hash>_v3`，需要至少登录过一次
-  - Windows：`%APPDATA%\DingTalk\<hash>_v3`
-  - macOS：`~/Library/Containers/<TeamID>.com.dingtalk.mac/Data/Library/Application Support/DingTalkMac/<hash>_v3`
+- **钉钉桌面版**：需要至少登录过一次，支持两种账号数据目录：
+  - 新版 `<hash>_v3`：密钥由数字 UID 和 `user_config` 中的 salt 派生
+  - 旧版 `<uid>_v2`：目录名就是 UID，密钥为 `md5(uid)`
+- **数据目录位置**：
+  - Windows：`%APPDATA%\DingTalk\`
+  - macOS：`~/Library/Containers/<TeamID>.com.dingtalk.mac/Data/Library/Application Support/DingTalkMac/`
 - **操作系统**：Windows 和 macOS（均已测试）。Linux 也会尝试查找钉钉数据目录，但尚未测试
-- 旧版 `*_v2` 数据库暂不支持
 
 ## 快速开始
 
@@ -133,7 +135,7 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 | `-host` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 会把聊天记录暴露到局域网，请谨慎 |
 | `-sync-interval` | `30` | 自动同步间隔（分钟，`0` 表示关闭）。指定后会覆盖网页上的设置 |
 | `-uid` | 自动识别 | 钉钉数字 UID |
-| `-dingtalk-dir` | 自动查找 | 账号目录，以 `<hash>_v3` 结尾 |
+| `-dingtalk-dir` | 自动查找 | 账号目录，以 `<hash>_v3` 或 `<uid>_v2` 结尾 |
 | `-data` | `<程序目录>/data` | 本地数据目录 |
 
 以上设置也可以写在 `data/config.json`（首次运行时自动生成）：
@@ -231,10 +233,10 @@ PUT    /api/settings                         {"sync_interval_minutes":10}
 
 **提示无法确定 UID？**
 程序会从钉钉日志（Windows 为 `%APPDATA%\DingTalk\log\`，macOS 为 `DingTalkMac/log/`）中查找 UID。如果日志已被清理，可以在日志里搜索 `real_uid=` 找到自己的数字 UID，
-再通过 `-uid` 参数或 `data/config.json` 指定。注意：V3 账号目录名中的那串字符是哈希值，不是 UID。
+再通过 `-uid` 参数或 `data/config.json` 指定。注意：V3 账号目录名中的那串字符是哈希值，不是 UID；V2 账号目录名中的数字就是 UID，会被自动使用。
 
 **电脑上登录过多个钉钉账号？**
-程序默认选择最近有更新的那个 `*_v3` 账号。要指定其他账号，用 `-dingtalk-dir` 参数或在 `data/config.json` 中设置 `dingtalk_dir`。
+程序默认选择最近有更新的那个账号（`*_v3` 或 `*_v2`）。要指定其他账号，用 `-dingtalk-dir` 参数或在 `data/config.json` 中设置 `dingtalk_dir`。
 
 **图片模糊，或标着"缩略图"？**
 钉钉只会为你在客户端里点开看过的图片下载原图，其余图片本地只有 720px 的缩略图。在钉钉中点开那张图片，再点一次"同步"即可看到原图。
@@ -289,7 +291,7 @@ go test ./...
 main.go                 命令行入口
 internal/
   config/   配置、账号目录发现、UID 识别
-  decrypt/  V3 数据库解密（聊天记录与日历）
+  decrypt/  V2 / V3 数据库解密（聊天记录与日历）
   store/    快照管理、消息解析、查询、日程
   analysis/ 日报统计、消息摘要、日程汇总
   agentdb/  Agent 写回的日报和待办
@@ -304,4 +306,5 @@ internal/
 ## 致谢与许可
 
 - V3 解密算法与 UID 识别方法移植自 [idealistichacker/dingtalk-chat-exporter](https://github.com/idealistichacker/dingtalk-chat-exporter)（MIT），详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- V2 密钥派生方式参考了 [p1g3/dingwave](https://github.com/p1g3/dingwave)
 - 本项目以 [MIT License](LICENSE) 发布

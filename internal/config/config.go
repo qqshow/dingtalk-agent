@@ -1,4 +1,4 @@
-// Package config resolves runtime settings: where the DingTalk V3 account data
+// Package config resolves runtime settings: where the DingTalk (V2/V3) account data
 // lives, the real numeric UID used as decryption key, and local storage paths.
 package config
 
@@ -26,7 +26,7 @@ type Config struct {
 	Port         int           // web listen port
 	SyncInterval time.Duration // automatic decrypt interval; 0 disables
 
-	dingTalkDir     string // ...\DingTalk\<hash>_v3
+	dingTalkDir     string // ...\DingTalk\<hash>_v3 or <uid>_v2
 	uid             string // real numeric DingTalk UID
 	intervalChanged bool   // SyncInterval was changed at runtime → persist it
 }
@@ -200,10 +200,11 @@ func (c *Config) save() error {
 // Account discovery
 // ---------------------------------------------------------------------------
 
-// Account is a local DingTalk V3 account directory.
+// Account is a local DingTalk account directory (<hash>_v3 or <uid>_v2).
 type Account struct {
 	Dir      string    `json:"data_dir"`
 	DirName  string    `json:"dir_name"`
+	Version  string    `json:"version"` // "v2" or "v3"
 	Modified time.Time `json:"last_modified"`
 }
 
@@ -241,7 +242,7 @@ func SearchBases() []string {
 	return out
 }
 
-// DiscoverAccounts finds *_v3 account dirs that contain DBFiles/dingtalk.db,
+// DiscoverAccounts finds *_v3 / *_v2 account dirs that contain DBFiles/dingtalk.db,
 // most recently modified first.
 func DiscoverAccounts() []Account {
 	var out []Account
@@ -251,7 +252,8 @@ func DiscoverAccounts() []Account {
 			continue
 		}
 		for _, e := range entries {
-			if !e.IsDir() || !strings.HasSuffix(e.Name(), "_v3") {
+			ver := AccountVersion(e.Name())
+			if !e.IsDir() || ver == "" {
 				continue
 			}
 			dir := filepath.Join(base, e.Name())
@@ -264,11 +266,38 @@ func DiscoverAccounts() []Account {
 			if w, err := os.Stat(db + "-wal"); err == nil && w.ModTime().After(mod) {
 				mod = w.ModTime()
 			}
-			out = append(out, Account{Dir: dir, DirName: e.Name(), Modified: mod})
+			out = append(out, Account{Dir: dir, DirName: e.Name(), Version: ver, Modified: mod})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Modified.After(out[j].Modified) })
 	return out
+}
+
+// AccountVersion returns "v3" / "v2" for an account directory name, or "".
+func AccountVersion(dirName string) string {
+	n := strings.ToLower(filepath.Base(filepath.Clean(dirName)))
+	switch {
+	case strings.HasSuffix(n, "_v3"):
+		return "v3"
+	case strings.HasSuffix(n, "_v2"):
+		return "v2"
+	}
+	return ""
+}
+
+// dirUID returns the numeric UID a V2 directory is named after (<uid>_v2).
+func dirUID(dir string) string {
+	n := filepath.Base(filepath.Clean(dir))
+	if AccountVersion(n) != "v2" {
+		return ""
+	}
+	id := n[:len(n)-3]
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return id
 }
 
 var uidPatterns = []struct {
@@ -355,7 +384,7 @@ func (c *Config) ResolveAccount(check KeyChecker) error {
 	if dir == "" {
 		accts := DiscoverAccounts()
 		if len(accts) == 0 {
-			return errors.New("no DingTalk V3 account found (looked for *_v3/DBFiles/dingtalk.db); " +
+			return errors.New("no DingTalk account found (looked for *_v3 or *_v2/DBFiles/dingtalk.db); " +
 				"open the DingTalk desktop client once, or set dingtalk_dir in data/config.json")
 		}
 		dir = accts[0].Dir
@@ -374,6 +403,9 @@ func (c *Config) ResolveAccount(check KeyChecker) error {
 		slog.Warn("configured UID does not decrypt the database, searching logs", "uid", uid)
 	}
 	cands := UIDCandidates(filepath.Dir(dir))
+	if id := dirUID(dir); id != "" {
+		cands = append([]string{id}, cands...) // V2 dirs are named after the UID
+	}
 	for _, cand := range cands {
 		if check(dir, cand) {
 			slog.Info("resolved real DingTalk UID from client logs", "uid", cand)

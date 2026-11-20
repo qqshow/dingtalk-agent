@@ -1,6 +1,10 @@
-// Package decrypt implements native decryption of DingTalk desktop V3
-// databases: SQLite pages encrypted with AES-128-ECB, key derived from the
-// real numeric UID plus a per-account salt stored in <account>/user_config.
+// Package decrypt implements native decryption of DingTalk desktop databases.
+// Both formats encrypt each 4096-byte SQLite page with AES-128-ECB; they only
+// differ in key derivation:
+//
+//   - V3 (<hash>_v3): md5(pbkdf2(uid+salt)) with a per-account salt stored in
+//     <account>/user_config.
+//   - V2 (<uid>_v2):  md5(uid).
 package decrypt
 
 import (
@@ -75,8 +79,22 @@ func DeriveKey(uid, salt string) ([]byte, error) {
 	return []byte(hex.EncodeToString(sum[:])[:16]), nil
 }
 
+// DeriveKeyV2 returns the 16-byte AES key of a V2 account.
+func DeriveKeyV2(uid string) []byte {
+	sum := md5.Sum([]byte(uid))
+	return []byte(hex.EncodeToString(sum[:])[:16])
+}
+
+// IsV2 reports whether accountDir is a V2 account (<uid>_v2).
+func IsV2(accountDir string) bool {
+	return strings.HasSuffix(strings.ToLower(filepath.Base(filepath.Clean(accountDir))), "_v2")
+}
+
 // KeyFor derives the key for an account directory and uid.
 func KeyFor(accountDir, uid string) ([]byte, error) {
+	if IsV2(accountDir) {
+		return DeriveKeyV2(uid), nil
+	}
 	salt, err := LoadSalt(accountDir)
 	if err != nil {
 		return nil, err
