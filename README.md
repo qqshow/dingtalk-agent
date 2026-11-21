@@ -8,20 +8,21 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 - **单文件，零依赖**：一个可执行文件，网页已内嵌；纯 Go 实现（含 SQLite），不需要 Python、CGO 或第三方解密工具
 - **原生解密，支持 V2 / V3**：AES-ECB，正确处理 WAL；聊天记录和日历一次完整解密约 2 秒
+- **内置 AI 助手**：接入 DeepSeek、通义千问、Kimi、智谱、OpenAI 或本机 Ollama 等兼容 OpenAI 接口的模型，每天自动生成日报、周报，提取待办、跟踪进展、安排第二天的工作
 - **为 Agent 设计**：结构化日报统计、按重要程度排序的消息摘要、日程，以及可写回的总结和待办
-- **数据只在本机**：只读访问钉钉数据；默认只监听 `127.0.0.1`，并拦截跨站和 DNS rebinding 访问；没有任何外部网络请求
+- **数据只在本机**：只读访问钉钉数据；默认只监听 `127.0.0.1`，并拦截跨站和 DNS rebinding 访问；除非你启用内置 AI 助手，否则没有任何外部网络请求
 
 ## 功能
 
 | 模块 | 说明 |
 |---|---|
 | 消息 | 浏览全部单聊、群聊和项目群，支持图片（优先显示原图，可缩放）、文件、引用、富文本和 @ 高亮 |
-| 工作台 | 每日统计（消息量、互动的人、参与的群和项目、会议、待我回复）、AI 日报、日程时间线、@我的消息 |
-| 待办 | Agent 提取或手动添加的待办（todo）与待跟踪（follow_up）事项，支持优先级、截止日期，可跳回来源会话 |
+| 工作台 | 每日统计（消息量、互动的人、参与的群和项目、会议、待我回复）、AI 日报和周报（可一键生成）、日程时间线、@我的消息 |
+| 待办 | AI 提取或手动添加的待办（todo）与待跟踪（follow_up）事项，支持优先级、截止日期，可跳回来源会话；AI 判断已完成的事项会提示你确认 |
 | 日程 | 钉钉日历月视图：会议、会议室、组织者、审批待办、AI 听记、请假 |
 | 搜索 | 全量关键字搜索，可限定会话和时间范围 |
 | 导出 | 按会话导出 JSON（含图片和文件附件），便于交给 AI 分析 |
-| 设置 | 自动同步频率、Agent 接入信息 |
+| 设置 | AI 助手（模型接口、自动生成时间）、自动同步频率、Agent 接入信息 |
 | Agent 接口 | REST API 和 MCP（HTTP / stdio），提供 12 个工具和 2 个提示词模板 |
 
 支持浅色和深色主题（默认跟随系统）。
@@ -149,7 +150,37 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 }
 ```
 
-## 接入 AI Agent
+## 内置 AI 助手
+
+不想另外装 Agent？在网页的 **设置 → AI 助手** 中填入模型接口即可：
+
+| 服务商 | 接口地址 |
+|---|---|
+| DeepSeek | `https://api.deepseek.com/v1` |
+| 通义千问（阿里云百炼） | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Kimi（月之暗面） | `https://api.moonshot.cn/v1` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` |
+| OpenAI | `https://api.openai.com/v1` |
+| Ollama（本机） | `http://localhost:11434/v1`，不需要 API Key |
+
+其他兼容 OpenAI `/chat/completions` 接口的服务同样可以使用。填好接口地址、模型名和 API Key 后，点"测试连接"确认可用，再启用。
+
+**它会做什么**
+
+- **日报**：每天在设定时间（默认 18:30）自动生成，也可以在工作台随时点"生成日报"。内容包括今日概览、会议结论、项目进展、需要重点关注的事、我今天做了什么，以及结合明日日程和待办截止日期的**明日安排**
+- **待办**：从聊天中提取新的待办和待跟踪事项，写入待办列表（重复的事项不会重复创建）
+- **跟踪进展**：对照当天聊天判断现有事项是否已完成或不再需要。AI 只给建议，在待办页面由你确认后才会生效
+- **周报**：每周固定一天（默认周五）在同一时间生成，根据本周日报、事项变化和下周日程写成，不会重新发送一周的聊天记录
+
+如果程序在设定时间没有运行，当天稍后启动时会补上。如果当天已有其他 Agent（如 Claude Code）写入的日报，自动任务不会覆盖它。
+
+**隐私**：生成日报时，只把与你相关的聊天发给模型服务商：单聊、你发过言或被 @ 的群、项目群；其他群只发送统计数字，机器人消息不发送。
+周报只使用已生成的日报和事项。想让数据完全不离开电脑，请使用本机的 Ollama。
+
+API Key 保存在 `data/config.json` 中，也可以用环境变量 `DINGTALK_AI_API_KEY` 提供，这种方式不会写入文件。
+发送给模型的聊天摘要默认最多 30000 字，可以在 `config.json` 的 `ai.max_input_chars` 中调整。
+
+## 接入外部 AI Agent
 
 ### Claude Code
 
@@ -218,6 +249,8 @@ PATCH  /api/agent/todos/{id}                 {"status":"done"}
 DELETE /api/agent/todos/{id}
 GET    /api/settings
 PUT    /api/settings                         {"sync_interval_minutes":10}
+POST   /api/ai/run                           {"kind":"daily|weekly","date":"today"}  由内置 AI 生成日报 / 周报
+GET    /api/ai/status                        内置 AI 的运行进度、上次结果和下次自动运行时间
 ```
 
 ## 统计口径
@@ -254,9 +287,10 @@ PUT    /api/settings                         {"sync_interval_minutes":10}
 
 ```
 data/
-  config.json        账号、端口、同步频率（自动生成）
+  config.json        账号、端口、同步频率、AI 助手设置（自动生成）
   decrypted/         解密后的快照（每次同步生成新文件，旧文件自动清理）
-  agent.db           Agent 写回的日报和待办，建议备份
+  agent.db           日报、周报和待办，建议备份
+  ai_state.json      AI 助手的自动运行记录
   exports/           导出的 JSON 和附件
   sync_state.json    同步状态
   logs/              运行日志
@@ -268,7 +302,7 @@ data/
 
 - 本项目仅用于**在你自己的电脑上读取你自己的钉钉数据**。请勿用于获取他人数据。
 - 聊天记录可能包含同事、客户的个人信息和公司机密。使用前请确认符合所在组织的数据安全规定；
-  将数据交给云端 AI 服务前，请评估其中的敏感信息。
+  启用内置 AI 助手或将数据交给其他云端 AI 服务前，请评估其中的敏感信息。
 - 本项目与钉钉、阿里巴巴无任何关联。"钉钉"及相关标识归其各自所有者所有。
 - 钉钉客户端更新可能导致数据格式变化、解密失效。本软件按"原样"提供，不提供任何担保。
 
@@ -295,6 +329,7 @@ internal/
   store/    快照管理、消息解析、查询、日程
   analysis/ 日报统计、消息摘要、日程汇总
   agentdb/  Agent 写回的日报和待办
+  ai/       内置 AI 助手（OpenAI 兼容接口、日报 / 周报生成、定时任务）
   syncer/   定时同步与状态
   export/   JSON 导出与 zip 打包
   web/      HTTP 服务、REST API、内嵌前端（static/，原生 JS，无构建步骤）

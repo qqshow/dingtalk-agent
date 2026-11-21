@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/qqshow/dingtalk-agent/internal/agentdb"
@@ -77,6 +78,7 @@ func (a *App) load(date, from, to string, refresh bool) (*analysis.Input, error)
 type ReportWithExtras struct {
 	*analysis.Report
 	Summary *agentdb.Summary `json:"saved_summary"`
+	Weekly  *agentdb.Summary `json:"weekly_summary"` // weekly report of the week containing the day
 	Todos   []agentdb.Todo   `json:"open_todos"`
 }
 
@@ -88,7 +90,11 @@ func (a *App) Report(date, from, to string, refresh bool) (*ReportWithExtras, er
 	r := analysis.BuildReport(in)
 	sum, _ := a.Agent.GetSummary(r.Period.DateKey)
 	todos, _ := a.Agent.ListTodos(agentdb.TodoFilter{Status: "open"})
-	return &ReportWithExtras{Report: r, Summary: sum, Todos: todos}, nil
+	var weekly *agentdb.Summary
+	if !strings.Contains(r.Period.DateKey, "~") {
+		weekly, _ = a.Agent.GetSummary(analysis.WeekKey(in.Period.From))
+	}
+	return &ReportWithExtras{Report: r, Summary: sum, Weekly: weekly, Todos: todos}, nil
 }
 
 // CalendarResult lists calendar entries of a period.

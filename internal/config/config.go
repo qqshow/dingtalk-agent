@@ -26,18 +26,47 @@ type Config struct {
 	Port         int           // web listen port
 	SyncInterval time.Duration // automatic decrypt interval; 0 disables
 
+	ai              AIConfig
 	dingTalkDir     string // ...\DingTalk\<hash>_v3 or <uid>_v2
 	uid             string // real numeric DingTalk UID
 	intervalChanged bool   // SyncInterval was changed at runtime → persist it
+	aiChanged       bool   // AI settings were changed at runtime → persist them
 }
 
 // persisted is the on-disk shape of data/config.json.
 type persisted struct {
-	UID                 string `json:"uid,omitempty"`
-	DingTalkDir         string `json:"dingtalk_dir,omitempty"`
-	Host                string `json:"host,omitempty"`
-	Port                int    `json:"port,omitempty"`
-	SyncIntervalMinutes *int   `json:"sync_interval_minutes,omitempty"`
+	UID                 string    `json:"uid,omitempty"`
+	DingTalkDir         string    `json:"dingtalk_dir,omitempty"`
+	Host                string    `json:"host,omitempty"`
+	Port                int       `json:"port,omitempty"`
+	SyncIntervalMinutes *int      `json:"sync_interval_minutes,omitempty"`
+	AI                  *AIConfig `json:"ai,omitempty"`
+}
+
+// AIConfig configures the built-in AI assistant (any OpenAI-compatible API).
+type AIConfig struct {
+	Enabled bool   `json:"enabled"`
+	BaseURL string `json:"base_url"` // e.g. https://api.deepseek.com/v1
+	Model   string `json:"model"`
+	APIKey  string `json:"api_key"`
+	// Scheduled runs (local time, "HH:MM"). The weekly report runs on
+	// WeeklyDay (0=Sunday … 6=Saturday) at the same time, after the daily one.
+	DailyEnabled  bool   `json:"daily_enabled"`
+	DailyTime     string `json:"daily_time"`
+	WeeklyEnabled bool   `json:"weekly_enabled"`
+	WeeklyDay     int    `json:"weekly_day"`
+	// MaxInputChars caps the chat digest sent to the model (default 30000).
+	MaxInputChars int `json:"max_input_chars,omitempty"`
+}
+
+// DefaultAIConfig is used until the user configures the assistant.
+func DefaultAIConfig() AIConfig {
+	return AIConfig{DailyEnabled: true, DailyTime: "18:30", WeeklyEnabled: true, WeeklyDay: 5}
+}
+
+// Ready reports whether the assistant is enabled and fully configured.
+func (a AIConfig) Ready() bool {
+	return a.Enabled && strings.TrimSpace(a.BaseURL) != "" && strings.TrimSpace(a.Model) != ""
 }
 
 // Overrides come from command-line flags; zero values mean "not set".
@@ -75,6 +104,35 @@ func (c *Config) SetInterval(d time.Duration) error {
 	c.mu.Lock()
 	c.SyncInterval = d
 	c.intervalChanged = true
+	c.mu.Unlock()
+	return c.save()
+}
+
+// AI returns the assistant settings. DINGTALK_AI_API_KEY, when set, overrides
+// the stored key (and is never written to config.json).
+func (c *Config) AI() AIConfig {
+	a := c.StoredAI()
+	if v := strings.TrimSpace(os.Getenv("DINGTALK_AI_API_KEY")); v != "" {
+		a.APIKey = v
+	}
+	return a
+}
+
+// StoredAI returns the assistant settings as stored, without env overrides.
+func (c *Config) StoredAI() AIConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.ai
+}
+
+// AIKeyFromEnv reports whether DINGTALK_AI_API_KEY provides the API key.
+func AIKeyFromEnv() bool { return strings.TrimSpace(os.Getenv("DINGTALK_AI_API_KEY")) != "" }
+
+// SetAI replaces the assistant settings and persists them.
+func (c *Config) SetAI(a AIConfig) error {
+	c.mu.Lock()
+	c.ai = a
+	c.aiChanged = true
 	c.mu.Unlock()
 	return c.save()
 }
@@ -121,6 +179,7 @@ func Load(o Overrides) (*Config, error) {
 		Host:         "127.0.0.1",
 		Port:         8090,
 		SyncInterval: 30 * time.Minute,
+		ai:           DefaultAIConfig(),
 	}
 	if c.DataDir == "" {
 		c.DataDir = DefaultDataDir()
@@ -146,6 +205,9 @@ func Load(o Overrides) (*Config, error) {
 	}
 	if p.SyncIntervalMinutes != nil {
 		c.SyncInterval = time.Duration(*p.SyncIntervalMinutes) * time.Minute
+	}
+	if p.AI != nil {
+		c.ai = *p.AI
 	}
 
 	if v := strings.TrimSpace(os.Getenv("DINGTALK_UID")); v != "" {
@@ -177,16 +239,20 @@ func (c *Config) save() error {
 	c.mu.RLock()
 	p := persisted{UID: c.uid, DingTalkDir: c.dingTalkDir}
 	changed, minutes := c.intervalChanged, int(c.SyncInterval/time.Minute)
+	aiChanged, ai := c.aiChanged, c.ai
 	c.mu.RUnlock()
 	// Preserve fields we do not manage here.
 	if b, err := os.ReadFile(c.configPath()); err == nil {
 		var old persisted
 		if json.Unmarshal(b, &old) == nil {
-			p.Host, p.Port, p.SyncIntervalMinutes = old.Host, old.Port, old.SyncIntervalMinutes
+			p.Host, p.Port, p.SyncIntervalMinutes, p.AI = old.Host, old.Port, old.SyncIntervalMinutes, old.AI
 		}
 	}
 	if changed {
 		p.SyncIntervalMinutes = &minutes
+	}
+	if aiChanged {
+		p.AI = &ai
 	}
 	b, _ := json.MarshalIndent(p, "", "  ")
 	tmp := c.configPath() + ".tmp"

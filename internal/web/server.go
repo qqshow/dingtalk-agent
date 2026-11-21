@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/qqshow/dingtalk-agent/internal/agentdb"
+	"github.com/qqshow/dingtalk-agent/internal/ai"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/app"
 	"github.com/qqshow/dingtalk-agent/internal/config"
@@ -30,12 +31,13 @@ var staticFS embed.FS
 
 type Server struct {
 	a   *app.App
+	ai  *ai.Runner
 	mux *http.ServeMux
 }
 
 // New builds the HTTP handler. mcp is mounted at /mcp when non-nil.
-func New(a *app.App, mcp http.Handler) http.Handler {
-	s := &Server{a: a, mux: http.NewServeMux()}
+func New(a *app.App, mcp http.Handler, runner *ai.Runner) http.Handler {
+	s := &Server{a: a, ai: runner, mux: http.NewServeMux()}
 	s.routes(mcp)
 	return s.guard(s.logging(s.mux))
 }
@@ -73,6 +75,12 @@ func (s *Server) routes(mcp http.Handler) {
 	m.HandleFunc("GET /api/local-file", s.apiLocalFile)
 
 	// Agent API.
+	m.HandleFunc("GET /api/ai/settings", s.apiAIGetSettings)
+	m.HandleFunc("PUT /api/ai/settings", s.apiAIPutSettings)
+	m.HandleFunc("POST /api/ai/test", s.apiAITest)
+	m.HandleFunc("POST /api/ai/run", s.apiAIRun)
+	m.HandleFunc("GET /api/ai/status", s.apiAIStatus)
+
 	m.HandleFunc("GET /api/agent", s.apiAgentIndex)
 	m.HandleFunc("POST /api/agent/sync", s.apiAgentSync)
 	m.HandleFunc("GET /api/agent/report", s.apiAgentReport)

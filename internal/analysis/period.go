@@ -82,3 +82,18 @@ func (p Period) DateKey() string {
 	}
 	return p.From.Format("2006-01-02") + "~" + p.To.AddDate(0, 0, -1).Format("2006-01-02")
 }
+
+// WeekRange returns Monday and Sunday of the week containing day.
+func WeekRange(day time.Time) (time.Time, time.Time) {
+	t := dayStart(day)
+	off := (int(t.Weekday()) + 6) % 7 // Monday = 0
+	mon := t.AddDate(0, 0, -off)
+	return mon, mon.AddDate(0, 0, 6)
+}
+
+// WeekKey is the summary key of a weekly report: "YYYY-MM-DD~YYYY-MM-DD"
+// (Monday~Sunday), the same format as Period.DateKey for that range.
+func WeekKey(day time.Time) string {
+	mon, sun := WeekRange(day)
+	return mon.Format("2006-01-02") + "~" + sun.Format("2006-01-02")
+}

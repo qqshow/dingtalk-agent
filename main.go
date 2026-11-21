@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qqshow/dingtalk-agent/internal/ai"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/app"
 	"github.com/qqshow/dingtalk-agent/internal/config"
@@ -162,11 +163,13 @@ func setupLogging(cfg *config.Config, level slog.Level, cmd string) {
 func serve(ctx context.Context, a *app.App) {
 	cfg := a.Cfg
 	m := mcp.New(a)
-	handler := web.New(a, m)
+	runner := ai.New(a)
+	handler := web.New(a, m, runner)
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
 	a.Syncer.Schedule(ctx)
+	runner.Schedule(ctx)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

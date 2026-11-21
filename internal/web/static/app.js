@@ -548,9 +548,11 @@ async function viewReport(r, alive) {
   $('#dToday').onclick = () => go('#/report');
   $('#dPick').onchange = e => e.target.value && go(`#/report?date=${e.target.value}`);
 
-  const [rep] = await Promise.all([api(`/api/agent/report?date=${encodeURIComponent(date)}`), loadConvs()]);
+  const [rep, aiSt] = await Promise.all([api(`/api/agent/report?date=${encodeURIComponent(date)}`), loadAIStatus(), loadConvs()]);
   if (!alive()) return;
+  S.ai = aiSt;
   renderDashboard(rep, date);
+  if (aiSt && aiSt.running) pollAI();
 }
 
 function greeting() {
@@ -577,19 +579,29 @@ function renderDashboard(r, date) {
   ].join('');
 
   const s = r.saved_summary;
-  const summaryHTML = s ? `
-      ${s.focus && s.focus.length ? `<div class="focus"><h4>${icon('flag')}需要重点关注</h4><ul>${s.focus.map(f => `<li>${esc(f)}</li>`).join('')}</ul></div>` : ''}
-      <div class="md">${md(s.summary)}</div>`
-    : `<div class="empty">今天还没有 AI 总结<br>在 Claude Code 中运行下面的命令，生成日报并自动整理待办
-      <div class="cmd"><code id="cmdText">/mcp__dingtalk__daily_summary ${esc(date)}</code>
+  const ai = S.ai || {};
+  const focusHTML = f => f && f.length ? `<div class="focus"><h4>${icon('flag')}需要重点关注</h4><ul>${f.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+  const summaryHTML = s ? `${focusHTML(s.focus)}<div class="md">${md(s.summary)}</div>`
+    : ai.ready ? `<div class="empty">${esc(date)} 还没有日报<br>点右上角「生成日报」${ai.next_daily && ai.next_daily.startsWith(date) ? `，或等 ${esc(ai.next_daily.slice(11))} 自动生成` : ''}</div>`
+    : `<div class="empty">还没有 AI 日报<br>在 <a href="#/settings">设置</a> 中接入 AI（DeepSeek、通义千问等），即可一键生成日报和周报<br>
+      或在 Claude Code 中运行：<div class="cmd"><code id="cmdText">/mcp__dingtalk__daily_summary ${esc(date)}</code>
       <button class="btn btn-sm" id="copyCmd">${icon('copy')}复制</button></div></div>`;
+  const aiButtons = ai.ready ? `
+      <button class="btn btn-sm" data-ai-run="weekly" title="根据本周日报、事项和下周日程生成周报">${icon('spark')}生成周报</button>
+      <button class="btn btn-sm btn-primary" data-ai-run="daily">${icon('spark')}${s ? '重新生成' : '生成日报'}</button>` : '';
+  const w = r.weekly_summary;
+  const weeklyHTML = w ? `
+        <section class="card ai-card"><details class="weekly" ${[5, 6, 0].includes(new Date().getDay()) ? 'open' : ''}>
+          <summary class="card-head"><span class="ai-badge">${icon('spark')}本周周报</span><span class="sub">${esc(w.date.replace('~', ' ~ '))}</span><div class="grow"></div>
+          <span class="sub">${esc(`${w.author || 'agent'} · ${w.updated_at.slice(5, 16)}`)}</span>${icon('chevR', 'weekly-chev')}</summary>
+          <div class="card-body">${focusHTML(w.focus)}<div class="md">${md(w.summary)}</div></div></details></section>` : '';
 
   const openTodos = r.open_todos || [];
   const todoHTML = openTodos.length ? openTodos.slice(0, 6).map(td => `
       <div class="list-item clickable" onclick="go('#/todos')">
         <div class="prio ${td.priority}"></div>
         <div class="li-main"><div class="li-title">${esc(td.title)}</div>
-        <div class="li-sub">${td.kind === 'follow_up' ? '待跟踪' : '待办'}${td.due ? ' · 截止 ' + esc(td.due) : ''}${td.owner ? ' · ' + esc(td.owner) : ''}</div></div>
+        <div class="li-sub">${td.kind === 'follow_up' ? '待跟踪' : '待办'}${td.due ? ' · 截止 ' + esc(td.due) : ''}${td.owner ? ' · ' + esc(td.owner) : ''}${td.ai_suggest ? ` <span class="tag tag-purple">AI：可能${td.ai_suggest === 'done' ? '已完成' : '不再需要'}</span>` : ''}</div></div>
       </div>`).join('') : '<div class="empty">没有未完成的事项 🎉</div>';
 
   const awaitingHTML = r.awaiting_my_reply.length ? r.awaiting_my_reply.map(p => {
@@ -621,8 +633,9 @@ function renderDashboard(r, date) {
     <div class="dash">
       <div class="dash-col">
         <section class="card ai-card"><div class="card-head"><span class="ai-badge">${icon('spark')}AI 日报</span><div class="grow"></div>
-          <span class="sub">${s ? esc(`${s.author || 'agent'} · ${s.updated_at.slice(5, 16)}`) : ''}</span></div>
-          <div class="card-body">${summaryHTML}</div></section>
+          <span class="sub">${s ? esc(`${s.author || 'agent'} · ${s.updated_at.slice(5, 16)}`) : ''}</span>${aiButtons}</div>
+          <div class="card-body"><div id="aiProgress"></div>${summaryHTML}</div></section>
+        ${weeklyHTML}
         <section class="card"><div class="card-head"><h3>等待我回复</h3><span class="sub">${r.awaiting_my_reply.length || ''}</span></div><div class="card-body">${awaitingHTML}</div></section>
         <section class="card"><div class="card-head"><h3>@我的消息</h3><span class="sub">${r.mentions_of_me.length || ''}</span></div><div class="card-body">${mentionHTML}</div></section>
         <section class="card"><div class="card-head"><h3>群与项目</h3><span class="sub">参与 ${r.groups.involved_count} · 活跃 ${r.groups.active_count}</span></div><div class="card-body">${groupHTML}</div></section>
@@ -638,9 +651,12 @@ function renderDashboard(r, date) {
     </div>`;
 
   $('#dashBody').addEventListener('click', e => {
+    const run = e.target.closest('[data-ai-run]');
+    if (run) return startAI(run.dataset.aiRun, date);
     const el = e.target.closest('[data-cid]');
     if (el) go(`#/chat/${encodeURIComponent(el.dataset.cid)}`);
   });
+  renderAIProgress(date);
   const cp = $('#copyCmd');
   if (cp) cp.onclick = () => navigator.clipboard.writeText($('#cmdText').textContent).then(() => toast('已复制'));
 }
@@ -677,6 +693,52 @@ function renderAgenda(c) {
       <div class="li-sub">${esc(e.start_str.slice(5, 10))}</div></div></div>`).join('');
   }
   return h;
+}
+
+// ===================================================================== AI
+async function loadAIStatus() {
+  try { return await api('/api/ai/status'); } catch (_) { return null; }
+}
+async function startAI(kind, date) {
+  try {
+    S.ai = await api('/api/ai/run', { method: 'POST', json: { kind, date } });
+    renderAIProgress(date);
+    pollAI();
+  } catch (e) { toast(e.message, 4000); }
+}
+let aiTimer = 0;
+function pollAI() {
+  clearTimeout(aiTimer);
+  aiTimer = setTimeout(async () => {
+    const st = await loadAIStatus();
+    if (!st) return pollAI();
+    const wasRunning = S.ai && S.ai.running;
+    S.ai = st;
+    if (st.running) { renderAIProgress(); return pollAI(); }
+    if (wasRunning && st.last) {
+      const what = st.last.kind === 'weekly' ? '周报' : '日报';
+      if (st.last.ok) toast(`${what}已生成` + (st.last.kind === 'daily' ? `：新增 ${st.last.new_items} 项事项，AI 建议更新 ${st.last.suggestions} 项` : ''), 3500);
+      else toast(`${what}生成失败：${st.last.error}`, 6000);
+      updateTodoBadge();
+      if (parseRoute().name === 'report') render();
+    }
+  }, 1500);
+}
+function renderAIProgress(date) {
+  const box = $('#aiProgress');
+  if (!box) return;
+  const st = S.ai || {};
+  $$('[data-ai-run]').forEach(b => (b.disabled = !!st.running));
+  if (st.running) {
+    const secs = Math.max(0, Math.round((Date.now() - new Date(st.started_at.replace(' ', 'T')).getTime()) / 1000));
+    box.innerHTML = `<div class="ai-progress"><span class="spinner"></span>
+      <b>正在生成${st.kind === 'weekly' ? '周报' : '日报'}</b><span class="muted">${esc(st.date_key.replace('~', ' ~ '))} · ${esc(st.stage)}${st.chars ? ` · 已生成 ${st.chars} 字` : ''} · ${secs} 秒</span></div>`;
+    return;
+  }
+  const l = st.last;
+  const d = date || (parseRoute().params.get('date') || ymd(new Date()));
+  box.innerHTML = l && !l.ok && (l.date_key === d || l.date_key.includes('~'))
+    ? `<div class="ai-progress error">${esc((l.kind === 'weekly' ? '周报' : '日报') + '生成失败：' + l.error)}<span class="muted">${esc(l.finished_at.slice(5, 16))}</span></div>` : '';
 }
 
 // ================================================================== TODOS
@@ -732,6 +794,9 @@ async function refreshTodos(status, kind) {
           ${t.source_date ? `<span>· ${esc(t.source_date)}</span>` : ''}
         </div>
         ${t.detail ? `<div class="todo-detail">${esc(t.detail)}</div>` : ''}
+        ${t.ai_suggest && t.status === 'open' ? `<div class="todo-ai">${icon('spark')}<span><b>AI 认为${t.ai_suggest === 'done' ? '可能已完成' : '可能不再需要'}</b>${t.ai_note ? '：' + esc(t.ai_note) : ''}</span>
+          <button class="btn btn-sm btn-primary" data-act="ai-accept" data-s="${esc(t.ai_suggest)}">${t.ai_suggest === 'done' ? '确认完成' : '确认放弃'}</button>
+          <button class="btn btn-sm btn-ghost" data-act="ai-dismiss">忽略</button></div>` : ''}
       </div>
       <div class="todo-actions">
         <select class="input" data-act="prio" title="优先级">${['high', 'medium', 'low'].map(p => `<option value="${p}" ${p === t.priority ? 'selected' : ''}>${PRIO[p][0]}</option>`).join('')}</select>
@@ -752,6 +817,8 @@ async function refreshTodos(status, kind) {
     try {
       if (act.dataset.act === 'toggle') await api(`/api/agent/todos/${id}`, { method: 'PATCH', json: { status: row.classList.contains('open') ? 'done' : 'open' } });
       if (act.dataset.act === 'drop') await api(`/api/agent/todos/${id}`, { method: 'PATCH', json: { status: 'dropped' } });
+      if (act.dataset.act === 'ai-accept') await api(`/api/agent/todos/${id}`, { method: 'PATCH', json: { status: act.dataset.s } });
+      if (act.dataset.act === 'ai-dismiss') await api(`/api/agent/todos/${id}`, { method: 'PATCH', json: { dismiss_ai: true } });
       if (act.dataset.act === 'del') { if (!confirm('删除这个事项？')) return; await api(`/api/agent/todos/${id}`, { method: 'DELETE' }); }
       refreshTodos(status, kind); updateTodoBadge();
     } catch (err) { toast(err.message); }
@@ -956,8 +1023,117 @@ function intervalLabel(m) {
   if (hit) return hit[1];
   return m % 60 === 0 ? `${m / 60} 小时` : `${m} 分钟`;
 }
+// Presets only fill the endpoint; model names change often, so they are hints.
+const AI_PRESETS = [
+  ['', '自定义', '', '模型名'],
+  ['deepseek', 'DeepSeek', 'https://api.deepseek.com/v1', '例如 deepseek-chat'],
+  ['qwen', '通义千问（阿里云百炼）', 'https://dashscope.aliyuncs.com/compatible-mode/v1', '例如 qwen-plus'],
+  ['kimi', 'Kimi（月之暗面）', 'https://api.moonshot.cn/v1', '填写 Kimi 控制台中的模型名'],
+  ['zhipu', '智谱 GLM', 'https://open.bigmodel.cn/api/paas/v4', '填写智谱控制台中的模型名'],
+  ['openai', 'OpenAI', 'https://api.openai.com/v1', '填写模型名'],
+  ['ollama', 'Ollama（本机，数据不出电脑）', 'http://localhost:11434/v1', '本地已下载的模型，例如 qwen2.5:14b'],
+];
+function aiPresetOf(url) { return (AI_PRESETS.find(p => p[2] && p[2] === url) || AI_PRESETS[0])[0]; }
+
+function aiSettingsCard(a, st) {
+  const preset = aiPresetOf(a.base_url);
+  const hint = (AI_PRESETS.find(p => p[0] === preset) || AI_PRESETS[0])[3];
+  const last = st.last;
+  const lastHTML = last ? `${last.ok ? '<span class="tag tag-green">成功</span>' : '<span class="tag tag-red">失败</span>'}
+      ${esc(last.kind === 'weekly' ? '周报' : '日报')} ${esc(last.date_key.replace('~', ' ~ '))} · ${esc(last.finished_at.slice(5, 16))}
+      <span class="muted">${last.trigger === 'schedule' ? '自动' : '手动'} · ${last.seconds.toFixed(0)} 秒${last.usage && last.usage.total_tokens ? ` · ${last.usage.total_tokens} tokens` : ''}${last.input_chars ? ` · 输入 ${last.input_chars} 字` : ''}</span>
+      ${last.error ? `<div style="color:var(--danger);margin-top:4px">${esc(last.error)}</div>` : ''}` : '—';
+  return `<section class="card ai-card"><div class="card-head"><span class="ai-badge">${icon('spark')}AI 助手</span><div class="grow"></div>
+      <label class="switch" title="启用后可在工作台一键生成日报和周报"><input type="checkbox" id="aiEnabled" ${a.enabled ? 'checked' : ''}><i></i><span>${a.enabled ? '已启用' : '未启用'}</span></label></div>
+    <div class="card-body">
+      <div class="set-hint" style="margin-top:0">接入任何兼容 OpenAI 接口的大模型，每天自动整理日报、周报，提取待办和待跟踪事项，判断事项进展，并安排第二天的工作。</div>
+      <div class="ai-form">
+        <label>服务商</label>
+        <select class="input" id="aiPreset">${AI_PRESETS.map(p => `<option value="${p[0]}" ${p[0] === preset ? 'selected' : ''}>${esc(p[1])}</option>`).join('')}</select>
+        <label>接口地址</label>
+        <input class="input" id="aiBase" value="${esc(a.base_url)}" placeholder="https://.../v1" autocomplete="off">
+        <label>模型</label>
+        <input class="input" id="aiModel" value="${esc(a.model)}" placeholder="${esc(hint)}" autocomplete="off">
+        <label>API Key</label>
+        <div class="ai-key"><input class="input" id="aiKey" type="password" autocomplete="new-password"
+          placeholder="${a.key_from_env ? '已通过环境变量 DINGTALK_AI_API_KEY 提供' : a.has_key ? `已保存 ${esc(a.api_key)}，留空则不修改` : '本地 Ollama 可留空'}">
+          ${a.has_key && !a.key_from_env ? '<button class="btn btn-ghost btn-sm" id="aiClearKey">清除</button>' : ''}</div>
+        <label>自动生成</label>
+        <div class="ai-sched">
+          <label class="check-label"><input type="checkbox" id="aiDaily" ${a.daily_enabled ? 'checked' : ''}>每天</label>
+          <input class="input" type="time" id="aiTime" value="${esc(a.daily_time || '18:30')}" style="width:110px">
+          <span class="muted">生成当天日报</span>
+          <label class="check-label"><input type="checkbox" id="aiWeekly" ${a.weekly_enabled ? 'checked' : ''}>每</label>
+          <select class="input" id="aiWeekDay" style="width:80px">${[1, 2, 3, 4, 5, 6, 0].map(d => `<option value="${d}" ${d === a.weekly_day ? 'selected' : ''}>${WEEK[d]}</option>`).join('')}</select>
+          <span class="muted">同一时间生成本周周报</span>
+        </div>
+      </div>
+      <div class="ai-actions">
+        <button class="btn" id="aiTest">${icon('sync')}测试连接</button>
+        <button class="btn btn-primary" id="aiSave">保存</button>
+        <span class="muted" id="aiTestResult"></span>
+      </div>
+      <div class="set-hint">🔒 隐私：生成日报时，只会把与你相关的聊天发给模型服务商：单聊、你发过言或被 @ 的群、项目群；其他群只发送统计数字。周报只使用已生成的日报和事项，不发送聊天原文。
+        想让数据完全不离开电脑，请使用本机的 Ollama。API Key 保存在本地数据目录的 config.json 中。</div>
+      ${a.ready ? `<div class="set-rows">
+        ${a.daily_enabled ? `<div class="set-row"><div class="set-k">下次日报</div><div class="set-v">${esc(st.next_daily || '—')}</div></div>` : ''}
+        ${a.weekly_enabled ? `<div class="set-row"><div class="set-k">下次周报</div><div class="set-v">${esc(st.next_weekly || '—')}</div></div>` : ''}
+        <div class="set-row"><div class="set-k">上次运行</div><div class="set-v">${lastHTML}</div></div>
+      </div>` : ''}
+    </div></section>`;
+}
+
+function aiFormValues() {
+  return {
+    enabled: $('#aiEnabled').checked,
+    base_url: $('#aiBase').value.trim(),
+    model: $('#aiModel').value.trim(),
+    api_key: $('#aiKey').value.trim(),
+    daily_enabled: $('#aiDaily').checked,
+    daily_time: $('#aiTime').value || '18:30',
+    weekly_enabled: $('#aiWeekly').checked,
+    weekly_day: +$('#aiWeekDay').value,
+  };
+}
+
+function bindAISettings() {
+  $('#aiPreset').onchange = e => {
+    const p = AI_PRESETS.find(x => x[0] === e.target.value);
+    if (p && p[2]) $('#aiBase').value = p[2];
+    $('#aiModel').placeholder = p ? p[3] : '模型名';
+    $('#aiModel').focus();
+  };
+  $('#aiBase').oninput = e => { $('#aiPreset').value = aiPresetOf(e.target.value.trim()); };
+  const save = async (extra = {}) => {
+    const v = { ...aiFormValues(), ...extra };
+    if (v.enabled && (!v.base_url || !v.model)) { toast('请填写接口地址和模型'); return false; }
+    try {
+      await api('/api/ai/settings', { method: 'PUT', json: v });
+      toast('AI 设置已保存');
+      render();
+      return true;
+    } catch (e) { toast(e.message, 4000); return false; }
+  };
+  $('#aiSave').onclick = () => save();
+  $('#aiEnabled').onchange = () => save();
+  const clear = $('#aiClearKey');
+  if (clear) clear.onclick = () => confirm('清除已保存的 API Key？') && save({ clear_key: true, api_key: '' });
+  $('#aiTest').onclick = async () => {
+    const out = $('#aiTestResult'), btn = $('#aiTest');
+    const v = aiFormValues();
+    if (!v.base_url || !v.model) { toast('请填写接口地址和模型'); return; }
+    btn.disabled = true; out.textContent = '正在连接…'; out.style.color = '';
+    try {
+      const r = await api('/api/ai/test', { method: 'POST', json: v });
+      out.textContent = r.ok ? `✓ 连接成功（${(r.ms / 1000).toFixed(1)} 秒）：${r.reply}` : `✗ ${r.error}`;
+      out.style.color = r.ok ? 'var(--success)' : 'var(--danger)';
+    } catch (e) { out.textContent = '✗ ' + e.message; out.style.color = 'var(--danger)'; }
+    btn.disabled = false;
+  };
+}
+
 async function viewSettings(r, alive) {
-  const st = await api('/api/settings');
+  const [st, ai] = await Promise.all([api('/api/settings'), api('/api/ai/settings')]);
   if (!alive()) return;
   const cur = st.sync_interval_minutes;
   const sync = st.sync || {};
@@ -967,7 +1143,9 @@ async function viewSettings(r, alive) {
   $('#view').innerHTML = `<div class="page"><div class="page-inner" style="max-width:860px">
     <div class="page-head"><h1>设置</h1></div>
 
-    <section class="card"><div class="card-head"><h3>自动同步</h3><div class="grow"></div>
+    ${aiSettingsCard(ai.settings, ai.status)}
+
+    <section class="card" style="margin-top:16px"><div class="card-head"><h3>自动同步</h3><div class="grow"></div>
       <button class="btn btn-primary btn-sm" id="setSyncNow">${icon('sync')}立即同步</button></div>
       <div class="card-body">
         <div class="set-label">同步频率</div>
@@ -1013,6 +1191,7 @@ async function viewSettings(r, alive) {
   $('#intervals').onclick = e => { const v = e.target.dataset.v; if (v !== undefined) save(+v); };
   $('#customMin').onchange = e => { const v = Math.round(+e.target.value); if (v >= 1 && v <= 1440) save(v); else toast('请输入 1–1440 之间的分钟数'); };
   $('#setSyncNow').onclick = syncNow;
+  bindAISettings();
   $('#view').addEventListener('click', e => {
     const b = e.target.closest('[data-copy]');
     if (b) navigator.clipboard.writeText(b.dataset.copy).then(() => toast('已复制'));

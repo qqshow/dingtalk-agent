@@ -469,3 +469,39 @@ mark { background: #fff1b8; color: inherit; border-radius: 2px; padding: 0 1px; 
 .set-k { width: 110px; flex: none; color: var(--text-3); }
 .set-v { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .set-v code { background: var(--surface-2); padding: 2px 6px; border-radius: 4px; font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+
+/* ---------------------------------------------------------------- AI assistant */
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: var(--text-2); user-select: none; }
+.switch input { display: none; }
+.switch i { position: relative; width: 34px; height: 20px; border-radius: 10px; background: var(--border); transition: background .15s; }
+.switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
+.switch input:checked + i { background: var(--primary); }
+.switch input:checked + i::after { transform: translateX(14px); }
+.ai-form { display: grid; grid-template-columns: 76px 1fr; gap: 10px 12px; align-items: center; margin-top: 14px; }
+.ai-form > label { font-size: 13px; color: var(--text-2); }
+.ai-form .input { width: 100%; }
+.ai-key { display: flex; gap: 6px; align-items: center; }
+.ai-sched { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+.ai-sched .muted { margin-right: 12px; }
+.check-label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.check-label input { accent-color: var(--primary); width: 14px; height: 14px; }
+.ai-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.ai-actions .muted { font-size: 12px; overflow-wrap: anywhere; }
+.ai-card .card-head .btn { margin-left: 4px; }
+.ai-progress { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; margin-bottom: 12px; border-radius: var(--radius); background: var(--primary-weak); font-size: 13px; }
+.ai-progress b { font-weight: 600; color: var(--primary); }
+.ai-progress.error { background: var(--danger-weak); color: var(--danger); }
+.spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--primary); border-right-color: transparent; animation: spin .8s linear infinite; flex: none; }
+details.weekly > summary { list-style: none; cursor: pointer; }
+details.weekly > summary::-webkit-details-marker { display: none; }
+details.weekly:not([open]) > summary { padding-bottom: 14px; }
+.weekly-chev { width: 15px; height: 15px; color: var(--text-3); transition: transform .15s; }
+details.weekly[open] .weekly-chev { transform: rotate(90deg); }
+.todo-ai { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--purple-weak); font-size: 12px; line-height: 1.6; }
+.todo-ai > svg { width: 14px; height: 14px; color: var(--purple); flex: none; }
+.todo-ai > span { flex: 1; min-width: 160px; overflow-wrap: anywhere; }
+.todo-ai b { color: var(--purple); font-weight: 600; }
+@media (max-width: 760px) {
+  .ai-form { grid-template-columns: 1fr; gap: 4px; }
+  .ai-form > label { margin-top: 6px; }
+}

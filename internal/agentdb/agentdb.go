@@ -58,7 +58,34 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("init agent db: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate agent db: %w", err)
+	}
 	return &DB{db: db}, nil
+}
+
+// migrate adds columns introduced after the first release.
+func migrate(db *sql.DB) error {
+	have := map[string]bool{}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('todos')`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		have[n] = true
+	}
+	rows.Close()
+	for _, col := range []string{"ai_suggest", "ai_note"} {
+		if !have[col] {
+			if _, err := db.Exec(`ALTER TABLE todos ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (d *DB) Close() error { return d.db.Close() }
@@ -152,6 +179,10 @@ type Todo struct {
 	CreatedAt  string `json:"created_at"`
 	UpdatedAt  string `json:"updated_at"`
 	DoneAt     string `json:"done_at"`
+	// AISuggest is a status the built-in AI proposes ("done" / "dropped");
+	// it only takes effect when the user confirms it.
+	AISuggest string `json:"ai_suggest"`
+	AINote    string `json:"ai_note"`
 }
 
 var (
@@ -240,12 +271,13 @@ func (d *DB) UpsertTodos(items []Todo) []UpsertResult {
 	return out
 }
 
-const todoCols = `id,kind,title,detail,priority,status,due,owner,cid,conv_title,msg_id,source_date,dedupe_key,created_at,updated_at,done_at`
+const todoCols = `id,kind,title,detail,priority,status,due,owner,cid,conv_title,msg_id,source_date,dedupe_key,created_at,updated_at,done_at,ai_suggest,ai_note`
 
 func scanTodo(r interface{ Scan(...any) error }) (*Todo, error) {
 	var t Todo
 	err := r.Scan(&t.ID, &t.Kind, &t.Title, &t.Detail, &t.Priority, &t.Status, &t.Due, &t.Owner, &t.CID,
-		&t.ConvTitle, &t.MsgID, &t.SourceDate, &t.DedupeKey, &t.CreatedAt, &t.UpdatedAt, &t.DoneAt)
+		&t.ConvTitle, &t.MsgID, &t.SourceDate, &t.DedupeKey, &t.CreatedAt, &t.UpdatedAt, &t.DoneAt,
+		&t.AISuggest, &t.AINote)
 	return &t, err
 }
 
@@ -319,6 +351,8 @@ type TodoPatch struct {
 	Due      *string `json:"due"`
 	Owner    *string `json:"owner"`
 	Kind     *string `json:"kind"`
+	// DismissAI clears an AI status suggestion without changing the status.
+	DismissAI bool `json:"dismiss_ai"`
 }
 
 func (d *DB) UpdateTodo(id int64, p TodoPatch) (*Todo, error) {
@@ -340,6 +374,10 @@ func (d *DB) UpdateTodo(id int64, p TodoPatch) (*Todo, error) {
 			t.DoneAt = ""
 		}
 		t.Status = *p.Status
+		t.AISuggest, t.AINote = "", "" // the user decided
+	}
+	if p.DismissAI {
+		t.AISuggest, t.AINote = "", ""
 	}
 	if p.Title != nil && strings.TrimSpace(*p.Title) != "" {
 		t.Title = strings.TrimSpace(*p.Title)
@@ -365,12 +403,51 @@ func (d *DB) UpdateTodo(id int64, p TodoPatch) (*Todo, error) {
 	if p.Owner != nil {
 		t.Owner = *p.Owner
 	}
-	_, err = d.db.Exec(`UPDATE todos SET status=?,title=?,detail=?,priority=?,kind=?,due=?,owner=?,done_at=?,updated_at=? WHERE id=?`,
-		t.Status, t.Title, t.Detail, t.Priority, t.Kind, t.Due, t.Owner, t.DoneAt, now(), id)
+	_, err = d.db.Exec(`UPDATE todos SET status=?,title=?,detail=?,priority=?,kind=?,due=?,owner=?,done_at=?,
+		ai_suggest=?,ai_note=?,updated_at=? WHERE id=?`,
+		t.Status, t.Title, t.Detail, t.Priority, t.Kind, t.Due, t.Owner, t.DoneAt, t.AISuggest, t.AINote, now(), id)
 	if err != nil {
 		return nil, err
 	}
 	return d.GetTodo(id)
+}
+
+// SuggestTodo records an AI status suggestion ("done" / "dropped") for an
+// open item; the status itself is left for the user to confirm.
+func (d *DB) SuggestTodo(id int64, status, note string) error {
+	if status != "done" && status != "dropped" {
+		return fmt.Errorf("invalid suggestion %q (done|dropped)", status)
+	}
+	res, err := d.db.Exec(`UPDATE todos SET ai_suggest=?, ai_note=?, updated_at=? WHERE id=? AND status='open'`,
+		status, strings.TrimSpace(note), now(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("todo %d not found or not open", id)
+	}
+	return nil
+}
+
+// TodosChangedBetween lists items created or closed in [from, to] (dates,
+// inclusive) plus everything still open, for weekly reports.
+func (d *DB) TodosChangedBetween(from, to string) ([]Todo, error) {
+	rows, err := d.db.Query(`SELECT `+todoCols+` FROM todos
+		WHERE status='open' OR substr(created_at,1,10) BETWEEN ? AND ? OR substr(done_at,1,10) BETWEEN ? AND ?
+		ORDER BY id LIMIT 500`, from, to, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Todo{}
+	for rows.Next() {
+		t, err := scanTodo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
 }
 
 func (d *DB) DeleteTodo(id int64) error {
