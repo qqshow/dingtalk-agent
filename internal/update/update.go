@@ -553,19 +553,63 @@ func verifyBinary(ctx context.Context, bin, want string) error {
 	return nil
 }
 
-// swap moves exe to exe.old and newPath to exe, rolling back on failure.
-// Renaming a running executable is allowed on Windows and Unix.
+// swap installs newPath as exe: exe is moved to exe.old (renaming a running
+// program is allowed), then newPath's content is COPIED to exe.
+//
+// Copying instead of renaming matters on Windows: security software
+// (Defender, 360, Huorong, ...) keeps a just-written or just-executed program
+// open while scanning it. Its handle allows reading but not deleting, so a
+// rename of newPath fails with "being used by another process" for as long
+// as the scan lasts, while reading it works. newPath is removed afterwards,
+// in the background if it is still locked.
 func swap(exe, newPath string) error {
 	old := exe + ".old"
 	removeRetry(old)
 	if err := renameRetry(exe, old); err != nil {
 		return fmt.Errorf("无法替换程序文件: %w", err)
 	}
-	if err := renameRetry(newPath, exe); err != nil {
-		renameRetry(old, exe)
-		return fmt.Errorf("无法替换程序文件: %w", err)
+	if err := copyFile(newPath, exe); err != nil {
+		os.Remove(exe)
+		if rerr := renameRetry(old, exe); rerr != nil {
+			return fmt.Errorf("无法写入新版本（%v），恢复旧版本也失败（%v）：请把 %s 改名为 %s", err, rerr,
+				filepath.Base(old), filepath.Base(exe))
+		}
+		return fmt.Errorf("无法写入新版本: %w", err)
+	}
+	if err := os.Remove(newPath); err != nil && !os.IsNotExist(err) {
+		go removeRetry(newPath) // still being scanned; CleanupOld also retries at next start
 	}
 	return nil
+}
+
+// copyFile copies src to a new file dst (mode 0755), retrying the open of
+// src briefly in case it is locked exclusively.
+func copyFile(src, dst string) error {
+	var in *os.File
+	var err error
+	for i := 0; i < 40; i++ {
+		if in, err = os.Open(src); err == nil {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // renameRetry renames, retrying for up to ~20 seconds. On Windows a file that
