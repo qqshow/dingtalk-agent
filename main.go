@@ -121,6 +121,11 @@ func main() {
 	}
 	setupLogging(cfg, level, cmd)
 
+	if guiMode {
+		runDesktop(cfg)
+		return
+	}
+
 	if err := cfg.ResolveAccount(decrypt.CheckKey); err != nil {
 		fatal(err)
 	}
@@ -135,7 +140,7 @@ func main() {
 
 	switch cmd {
 	case "serve":
-		serve(ctx, stop, a)
+		serve(ctx, a, nil, nil)
 	case "mcp":
 		runMCP(ctx, a)
 	case "sync":
@@ -181,7 +186,56 @@ func setupLogging(cfg *config.Config, level slog.Level, cmd string) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})).With("cmd", cmd))
 }
 
-func serve(ctx context.Context, stop context.CancelFunc, a *app.App) {
+// runDesktop starts the program as a desktop app: the window (with a loading
+// page) appears right away while the account is resolved and the server
+// starts in the background.
+func runDesktop(cfg *config.Config) {
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	// Bind first: if another instance is running, show its window instead
+	// of flashing up a second one.
+	ln, err := listen(addr)
+	if err != nil {
+		if showRunningInstance(cfg.Port) {
+			os.Exit(0)
+		}
+		fatal(fmt.Errorf("listen %s: %w (is another instance running?)", addr, err))
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ready := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer desktop.Quit()
+		if err := cfg.ResolveAccount(decrypt.CheckKey); err != nil {
+			fatal(err)
+		}
+		a, err := app.New(cfg, version)
+		if err != nil {
+			fatal(err)
+		}
+		defer a.Close()
+		serve(ctx, a, ln, ready)
+	}()
+	desktop.Run(desktop.Options{
+		URL:      "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.Port)) + "/",
+		Title:    appTitle,
+		StateDir: cfg.DataDir,
+		OnQuit:   stop,
+		Ready:    ready,
+	})
+	stop() // window and tray are gone: stop the server too
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+	}
+}
+
+// serve runs the web server until ctx is done (or an update restarts the
+// program). ln is an already bound listener (nil: bind here); ready, if not
+// nil, is closed once requests are being served.
+func serve(ctx context.Context, a *app.App, ln net.Listener, ready chan struct{}) {
 	cfg := a.Cfg
 	m := mcp.New(a)
 	runner := ai.New(a)
@@ -202,12 +256,11 @@ func serve(ctx context.Context, stop context.CancelFunc, a *app.App) {
 	upd.Schedule(ctx, cfg.AutoUpdateCheck)
 	update.CleanupOld()
 
-	ln, err := listen(addr)
-	if err != nil {
-		if guiMode && showRunningInstance(cfg.Port) {
-			os.Exit(0) // already running: its window was brought to the front
+	if ln == nil {
+		var err error
+		if ln, err = listen(addr); err != nil {
+			fatal(fmt.Errorf("listen %s: %w (is another instance running?)", addr, err))
 		}
-		fatal(fmt.Errorf("listen %s: %w (is another instance running?)", addr, err))
 	}
 	host := cfg.Host
 	if host == "0.0.0.0" || host == "" {
@@ -220,47 +273,33 @@ func serve(ctx context.Context, stop context.CancelFunc, a *app.App) {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
+	if ready != nil {
+		close(ready)
+	}
+	// Load the latest snapshot now instead of on the first page request.
+	go a.Store.Snapshot()
 	shutdown := func() {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(sctx)
 	}
-	wait := func() {
-		select {
-		case <-ctx.Done():
-			shutdown()
-		case err := <-errc:
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				fatal(err)
-			}
-		case <-restartCh:
-			// An update was installed: release the port and start the new version.
-			shutdown()
-			a.Close()
-			desktop.Quit() // remove the tray icon before the new process adds its own
-			fmt.Fprintln(os.Stderr, "\n  已升级到新版本，正在重启…")
-			if err := update.Restart(); err != nil {
-				fatal(fmt.Errorf("新版本已安装，但自动重启失败: %w。请手动重新启动程序", err))
-			}
-			os.Exit(0) // Windows: the new process has been started
-		}
-	}
-	if !guiMode {
-		wait()
-		return
-	}
-	done := make(chan struct{})
-	go func() { defer close(done); wait(); desktop.Quit() }()
-	desktop.Run(desktop.Options{
-		URL:      "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.Port)) + "/",
-		Title:    appTitle,
-		StateDir: cfg.DataDir,
-		OnQuit:   stop,
-	})
-	stop() // window and tray are gone: stop the server too
 	select {
-	case <-done:
-	case <-time.After(8 * time.Second):
+	case <-ctx.Done():
+		shutdown()
+	case err := <-errc:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fatal(err)
+		}
+	case <-restartCh:
+		// An update was installed: release the port and start the new version.
+		shutdown()
+		a.Close()
+		desktop.Quit() // remove the tray icon before the new process adds its own
+		fmt.Fprintln(os.Stderr, "\n  已升级到新版本，正在重启…")
+		if err := update.Restart(); err != nil {
+			fatal(fmt.Errorf("新版本已安装，但自动重启失败: %w。请手动重新启动程序", err))
+		}
+		os.Exit(0) // Windows: the new process has been started
 	}
 }
 

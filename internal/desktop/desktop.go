@@ -11,6 +11,9 @@ type Options struct {
 	Title    string // window title and tray tooltip
 	StateDir string // where window placement and the WebView2 profile are kept
 	OnQuit   func() // called when the user picks 退出 in the tray menu
+	// Ready is closed once URL can be loaded; until then the window shows a
+	// loading page. nil means ready.
+	Ready <-chan struct{}
 }
 
 // openExternalJS routes links that leave the app (other sites, new-tab links)

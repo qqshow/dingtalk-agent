@@ -173,6 +173,10 @@ func AllowForeground() { pAllowSetForegroundWindow.Call(^uintptr(0)) } // ASFW_A
 type state struct {
 	Placement     *windowPlacement `json:"placement,omitempty"`
 	TrayHintShown bool             `json:"tray_hint_shown,omitempty"`
+	// Last page theme, so the next start paints the right colors before the
+	// page has loaded.
+	Dark *bool   `json:"dark,omitempty"`
+	BG   *[3]int `json:"bg,omitempty"`
 }
 
 type windowPlacement struct {
@@ -269,6 +273,11 @@ func windowLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
+	dark, bg := startTheme()
+	// Paint the theme color (not white) until the page has rendered.
+	os.Setenv("WEBVIEW2_DEFAULT_BACKGROUND_COLOR", fmt.Sprintf("FF%02X%02X%02X", bg[0], bg[1], bg[2]))
+	unhook := hookCreate(dark, bg)
+
 	w, h := defaultSize()
 	wv := webview2.NewWithOptions(webview2.WebViewOptions{
 		AutoFocus: true,
@@ -277,24 +286,36 @@ func windowLoop() {
 			Title: opts.Title, Width: uint(w), Height: uint(h), Center: true,
 		},
 	})
+	unhook()
 	if wv == nil {
 		slog.Warn("WebView2 is not available, opening the browser instead")
 		noWebView.Store(true)
-		OpenBrowser(opts.URL)
+		go func() { waitReady(); OpenBrowser(opts.URL) }()
 		return
 	}
 	handle := uintptr(wv.Window())
 	setIcons(handle)
-	setTitleBar(handle, systemDark(), nil) // before the page reports its theme
+	setTitleBar(handle, dark, &bg)
 	restorePlacement(handle)
 	origProc, _, _ = pSetWindowLongPtrW.Call(handle, gwlpWndProc, windows.NewCallback(wndProc))
 	wv.Bind("__openExternal", func(u string) { OpenBrowser(u) })
 	wv.Bind("__setTheme", func(dark bool, r, g, b int) {
-		setTitleBar(handle, dark, &[3]int{r, g, b})
+		c := [3]int{r, g, b}
+		setTitleBar(handle, dark, &c)
+		rememberTheme(dark, c)
 	})
 	wv.Init(openExternalJS)
 	wv.Init(themeJS)
-	wv.Navigate(opts.URL)
+	if isReady() {
+		wv.Navigate(opts.URL)
+	} else {
+		// The server is still starting: show a loading page right away.
+		wv.SetHtml(loadingHTML(dark, bg))
+		go func() {
+			waitReady()
+			wv.Dispatch(func() { wv.Navigate(opts.URL) })
+		}()
+	}
 	hwnd.Store(handle)
 	if quitting.Load() { // Quit raced with window creation
 		pPostMessageW.Call(handle, wmClose, 0, 0)
@@ -520,4 +541,148 @@ func systemDark() bool {
 	defer k.Close()
 	v, _, err := k.GetIntegerValue("AppsUseLightTheme")
 	return err == nil && v == 0
+}
+
+// ---- startup appearance ------------------------------------------------------
+
+func isReady() bool {
+	if opts.Ready == nil {
+		return true
+	}
+	select {
+	case <-opts.Ready:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitReady() {
+	if opts.Ready != nil {
+		<-opts.Ready
+	}
+}
+
+var (
+	lightBG = [3]int{0xf2, 0xf3, 0xf5}
+	darkBG  = [3]int{0x13, 0x14, 0x16}
+)
+
+// startTheme returns the theme to paint before the page reports its own:
+// the last page theme, else the Windows app theme.
+func startTheme() (bool, [3]int) {
+	stMu.Lock()
+	d, c := st.Dark, st.BG
+	stMu.Unlock()
+	if d != nil && c != nil {
+		return *d, *c
+	}
+	if systemDark() {
+		return true, darkBG
+	}
+	return false, lightBG
+}
+
+func rememberTheme(dark bool, c [3]int) {
+	stMu.Lock()
+	changed := st.Dark == nil || *st.Dark != dark || st.BG == nil || *st.BG != c
+	if changed {
+		st.Dark, st.BG = &dark, &c
+	}
+	stMu.Unlock()
+	if changed {
+		saveState()
+	}
+}
+
+func loadingHTML(dark bool, bg [3]int) string {
+	fg := "#6b7280"
+	if dark {
+		fg = "#8a8f98"
+	}
+	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%%;background:rgb(%d,%d,%d);color:%s;font:14px "Microsoft YaHei UI","Segoe UI",sans-serif}
+body{display:flex;align-items:center;justify-content:center;gap:10px;user-select:none}
+.s{width:18px;height:18px;border:2px solid currentColor;border-top-color:transparent;border-radius:50%%;animation:r .8s linear infinite}
+@keyframes r{to{transform:rotate(360deg)}}
+</style></head><body><div class="s"></div>正在启动…</body></html>`, bg[0], bg[1], bg[2], fg)
+}
+
+var (
+	gdi32                = windows.NewLazySystemDLL("gdi32.dll")
+	pCreateSolidBrush    = gdi32.NewProc("CreateSolidBrush")
+	pSetWindowsHookExW   = user32.NewProc("SetWindowsHookExW")
+	pUnhookWindowsHookEx = user32.NewProc("UnhookWindowsHookEx")
+	pCallNextHookEx      = user32.NewProc("CallNextHookEx")
+	pSetClassLongPtrW    = user32.NewProc("SetClassLongPtrW")
+	pGetClassNameW       = user32.NewProc("GetClassNameW")
+)
+
+// createStruct is CREATESTRUCTW.
+type createStruct struct {
+	CreateParams, Instance, Menu, Parent uintptr
+	Cy, Cx, Y, X                         int32
+	Style                                int32
+	Name, Class                          uintptr
+	ExStyle                              uint32
+}
+
+// cbtCreateWnd is CBT_CREATEWNDW.
+type cbtCreateWnd struct {
+	Lpcs        *createStruct
+	InsertAfter uintptr
+}
+
+// hookCreate watches the creation of the webview window on this thread
+// (the library creates and shows it before WebView2 has started, which
+// takes a moment): it gets the saved size and position, a background in
+// the theme color, the app icon and the themed title bar from the first
+// frame on. The returned function removes the hook.
+func hookCreate(dark bool, bg [3]int) func() {
+	stMu.Lock()
+	p := st.Placement
+	stMu.Unlock()
+	color := uintptr(bg[0]&0xff) | uintptr(bg[1]&0xff)<<8 | uintptr(bg[2]&0xff)<<16
+	brush, _, _ := pCreateSolidBrush.Call(color)
+	var hook uintptr
+	isWebview := func(h uintptr) bool {
+		buf := make([]uint16, 32)
+		pGetClassNameW.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		return windows.UTF16ToString(buf) == "webview"
+	}
+	cb := windows.NewCallback(func(code int32, wp, lp uintptr) uintptr {
+		const hcbtCreateWnd, hcbtActivate = 3, 5
+		switch code {
+		case hcbtCreateWnd:
+			if isWebview(wp) {
+				if brush != 0 {
+					pSetClassLongPtrW.Call(wp, ^uintptr(9), brush) // GCLP_HBRBACKGROUND = -10
+				}
+				if p != nil && p.Right-p.Left >= 200 && p.Bottom-p.Top >= 150 {
+					// lp points to CBT_CREATEWND; reinterpret it without a
+					// uintptr->Pointer conversion.
+					cbt := *(**cbtCreateWnd)(unsafe.Pointer(&lp))
+					cs := cbt.Lpcs
+					cs.X, cs.Y = p.Left, p.Top
+					cs.Cx, cs.Cy = p.Right-p.Left, p.Bottom-p.Top
+				}
+			}
+		case hcbtActivate:
+			if isWebview(wp) {
+				setIcons(wp)
+				setTitleBar(wp, dark, &bg)
+			}
+		}
+		r, _, _ := pCallNextHookEx.Call(hook, uintptr(code), wp, lp)
+		return r
+	})
+	const whCBT = 5
+	tid := windows.GetCurrentThreadId()
+	hook, _, _ = pSetWindowsHookExW.Call(whCBT, cb, 0, uintptr(tid))
+	return func() {
+		if hook != 0 {
+			pUnhookWindowsHookEx.Call(hook)
+			hook = 0
+		}
+	}
 }
