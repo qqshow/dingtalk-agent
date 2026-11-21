@@ -505,3 +505,19 @@ details.weekly[open] .weekly-chev { transform: rotate(90deg); }
   .ai-form { grid-template-columns: 1fr; gap: 4px; }
   .ai-form > label { margin-top: 6px; }
 }
+
+/* ---------------------------------------------------------------- update */
+.rail-item.has-update { position: relative; }
+.rail-item.has-update::after { content: ""; position: absolute; top: 6px; right: 18px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--rail); }
+.update-card { position: fixed; right: 20px; bottom: 20px; z-index: 900; width: 340px; max-width: calc(100vw - 32px); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); padding: 14px 16px; overflow: hidden; }
+.update-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: linear-gradient(90deg, #007fff, #8a5cf6, #00b5c7); }
+.uc-head { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.uc-head > svg { width: 16px; height: 16px; color: var(--primary); }
+.uc-head .grow { flex: 1; }
+.uc-sub { font-size: 12px; color: var(--text-3); margin-top: 4px; }
+.uc-sub a { color: var(--primary); }
+.uc-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.uc-note { font-size: 12px; color: var(--text-2); margin-top: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.uc-note.error { color: var(--danger); }
+.uc-progress { height: 6px; border-radius: 3px; background: var(--surface-2); margin-top: 12px; overflow: hidden; }
+.uc-progress i { display: block; height: 100%; background: var(--primary); border-radius: 3px; transition: width .3s; }

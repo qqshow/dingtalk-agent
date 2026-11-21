@@ -10,7 +10,7 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 - **原生解密，支持 V2 / V3**：AES-ECB，正确处理 WAL；聊天记录和日历一次完整解密约 2 秒
 - **内置 AI 助手**：接入 DeepSeek、通义千问、Kimi、智谱、OpenAI 或本机 Ollama 等兼容 OpenAI 接口的模型，每天自动生成日报、周报，提取待办、跟踪进展、安排第二天的工作
 - **为 Agent 设计**：结构化日报统计、按重要程度排序的消息摘要、日程，以及可写回的总结和待办
-- **数据只在本机**：只读访问钉钉数据；默认只监听 `127.0.0.1`，并拦截跨站和 DNS rebinding 访问；除非你启用内置 AI 助手，否则没有任何外部网络请求
+- **数据只在本机**：只读访问钉钉数据；默认只监听 `127.0.0.1`，并拦截跨站和 DNS rebinding 访问；对外的网络请求只有两种：检查 GitHub 上的新版本（可关闭），以及你启用内置 AI 助手后访问你配置的模型接口
 
 ## 功能
 
@@ -22,7 +22,8 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 | 日程 | 钉钉日历月视图：会议、会议室、组织者、审批待办、AI 听记、请假 |
 | 搜索 | 全量关键字搜索，可限定会话和时间范围 |
 | 导出 | 按会话导出 JSON（含图片和文件附件），便于交给 AI 分析 |
-| 设置 | AI 助手（模型接口、自动生成时间）、自动同步频率、Agent 接入信息 |
+| 设置 | AI 助手（模型接口、自动生成时间）、自动同步频率、Agent 接入信息、检查更新 |
+| 自动升级 | 发现 GitHub 上的新版本时提示，确认后自动下载、校验、替换并重启 |
 | Agent 接口 | REST API 和 MCP（HTTP / stdio），提供 12 个工具和 2 个提示词模板 |
 
 支持浅色和深色主题（默认跟随系统）。
@@ -283,11 +284,18 @@ GET    /api/ai/status                        内置 AI 的运行进度、上次�
 **会修改钉钉的数据吗？**
 不会。程序只读取钉钉的数据库文件，解密后的副本保存在 `data/decrypted/`，Agent 写回的内容保存在独立的 `data/agent.db`。
 
+**怎么升级？**
+程序启动时和每隔 12 小时会检查 GitHub 上的新版本。有新版本时，网页右下角会提示，点"立即升级"后自动完成：
+下载对应系统的安装包，用发布页的 `SHA256SUMS.txt` 校验，确认新程序可以正常运行后替换旧程序，再自动重启，页面随后自动刷新。
+任何一步失败都会保留原来的程序。也可以在 **设置 → 关于** 中手动检查更新，或关闭自动检查。
+自己从源码编译的版本（版本号显示为 `dev`）不会提示升级。
+如果程序放在没有写权限的目录（如 `C:\Program Files`），自动升级会失败，请手动下载替换。
+
 ## 数据目录
 
 ```
 data/
-  config.json        账号、端口、同步频率、AI 助手设置（自动生成）
+  config.json        账号、端口、同步频率、AI 助手、是否自动检查更新（自动生成）
   decrypted/         解密后的快照（每次同步生成新文件，旧文件自动清理）
   agent.db           日报、周报和待办，建议备份
   ai_state.json      AI 助手的自动运行记录
@@ -331,6 +339,7 @@ internal/
   agentdb/  Agent 写回的日报和待办
   ai/       内置 AI 助手（OpenAI 兼容接口、日报 / 周报生成、定时任务）
   syncer/   定时同步与状态
+  update/   检查新版本与自动升级
   export/   JSON 导出与 zip 打包
   web/      HTTP 服务、REST API、内嵌前端（static/，原生 JS，无构建步骤）
   mcp/      MCP server（工具与提示词，支持 stdio / HTTP）

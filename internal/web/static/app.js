@@ -1132,8 +1132,18 @@ function bindAISettings() {
   };
 }
 
+function updateInfoText() {
+  const u = U.st;
+  if (!u) return '';
+  if (u.check_error) return `<span style="color:var(--danger)">${esc(u.check_error)}</span>`;
+  if (u.available && u.latest) return `<span style="color:var(--primary)">有新版本 ${esc(u.latest.tag_name)}</span>`;
+  if (!u.supported && u.reason) return esc(u.reason);
+  if (u.checked_at) return `已是最新版本 · ${esc(u.checked_at.slice(5, 16))} 检查`;
+  return '';
+}
+
 async function viewSettings(r, alive) {
-  const [st, ai] = await Promise.all([api('/api/settings'), api('/api/ai/settings')]);
+  const [st, ai] = await Promise.all([api('/api/settings'), api('/api/ai/settings'), loadUpdate()]);
   if (!alive()) return;
   const cur = st.sync_interval_minutes;
   const sync = st.sync || {};
@@ -1173,7 +1183,10 @@ async function viewSettings(r, alive) {
 
     <section class="card" style="margin-top:16px"><div class="card-head"><h3>关于</h3></div>
       <div class="card-body"><div class="set-rows">
-        ${row('版本', esc(st.version))}
+        ${row('版本', `${esc(st.version)} <span class="muted" id="updInfo">${updateInfoText()}</span>`,
+          `<button class="btn btn-sm" id="updCheck">${icon('sync')}检查更新</button>`)}
+        ${row('自动检查更新', `<label class="switch"><input type="checkbox" id="updAuto" ${st.auto_update_check ? 'checked' : ''}><i></i>
+          <span>启动时和每 12 小时检查一次 GitHub 上的新版本</span></label>`)}
         ${row('钉钉账号', `${esc(S.me.name)} <span class="muted">UID ${esc(st.uid)}</span>`)}
         ${row('钉钉数据目录', `<code>${esc(st.dingtalk_dir)}</code>`)}
         ${row('本地数据目录', `<code>${esc(st.data_dir)}</code>`, copyBtn(st.data_dir))}
@@ -1192,6 +1205,17 @@ async function viewSettings(r, alive) {
   $('#customMin').onchange = e => { const v = Math.round(+e.target.value); if (v >= 1 && v <= 1440) save(v); else toast('请输入 1–1440 之间的分钟数'); };
   $('#setSyncNow').onclick = syncNow;
   bindAISettings();
+  $('#updCheck').onclick = async () => {
+    const b = $('#updCheck'); b.disabled = true; $('#updInfo').textContent = '正在检查…';
+    const st = await loadUpdate(true);
+    b.disabled = false;
+    $('#updInfo').innerHTML = updateInfoText();
+    if (st && st.available) { try { localStorage.removeItem('update-dismissed'); } catch (_) {} showUpdateCard(); }
+  };
+  $('#updAuto').onchange = async e => {
+    try { await api('/api/settings', { method: 'PUT', json: { auto_update_check: e.target.checked } }); toast(e.target.checked ? '已开启自动检查更新' : '已关闭自动检查更新'); }
+    catch (err) { toast(err.message); }
+  };
   $('#view').addEventListener('click', e => {
     const b = e.target.closest('[data-copy]');
     if (b) navigator.clipboard.writeText(b.dataset.copy).then(() => toast('已复制'));
@@ -1223,6 +1247,91 @@ async function syncNow() {
   refreshSyncStatus();
 }
 
+// ================================================================ UPDATE
+const U = { st: null, autoCheck: true, timer: 0 };
+function fmtMB(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+async function loadUpdate(force = false) {
+  try {
+    const d = await api(force ? '/api/update/check' : '/api/update/status', force ? { method: 'POST' } : {});
+    U.st = d.status; U.autoCheck = d.auto_check;
+  } catch (_) {}
+  const settings = $('.rail-item[data-route="settings"]');
+  if (settings) settings.classList.toggle('has-update', !!(U.st && U.st.available));
+  return U.st;
+}
+function dismissedUpdate() { try { return localStorage.getItem('update-dismissed') || ''; } catch (_) { return ''; } }
+async function maybeShowUpdate() {
+  const st = await loadUpdate();
+  if (st && st.available && st.latest && dismissedUpdate() !== st.latest.tag_name) showUpdateCard();
+}
+function showUpdateCard() {
+  const st = U.st; if (!st || !st.latest) return;
+  let card = $('#updateCard');
+  if (!card) { card = document.createElement('div'); card.id = 'updateCard'; card.className = 'update-card'; document.body.appendChild(card); }
+  const l = st.latest;
+  card.innerHTML = `<div class="uc-head">${icon('spark')}<b>发现新版本 ${esc(l.tag_name)}</b><div class="grow"></div>
+      <button class="btn btn-ghost btn-sm btn-icon" data-u="close" title="关闭">✕</button></div>
+    <div class="uc-sub">当前版本 ${esc(st.current)}${l.published_at ? ` · 发布于 ${esc(l.published_at.slice(0, 10))}` : ''}
+      · <a href="${esc(l.html_url)}" target="_blank" rel="noopener">更新说明</a></div>
+    <div id="ucBody">${st.supported
+      ? `<div class="uc-actions"><button class="btn btn-sm" data-u="later">稍后提醒</button><button class="btn btn-sm btn-primary" data-u="apply">立即升级</button></div>`
+      : `<div class="uc-note">${esc(st.reason || '当前版本不支持自动升级')}</div><div class="uc-actions"><a class="btn btn-sm btn-primary" href="${esc(l.html_url)}" target="_blank" rel="noopener">前往下载</a></div>`}</div>`;
+  card.onclick = e => {
+    const b = e.target.closest('[data-u]'); if (!b) return;
+    if (b.dataset.u === 'close' || b.dataset.u === 'later') {
+      if (b.dataset.u === 'close') { try { localStorage.setItem('update-dismissed', l.tag_name); } catch (_) {} }
+      card.remove();
+    }
+    if (b.dataset.u === 'apply') applyUpdate();
+  };
+}
+async function applyUpdate() {
+  const l = U.st && U.st.latest; if (!l) return;
+  if (!confirm(`升级到 ${l.tag_name}？\n\n程序会自动下载新版本、校验并替换，然后重启。重启期间页面会短暂断开，完成后自动刷新。`)) return;
+  if (!$('#updateCard')) showUpdateCard();
+  try {
+    const d = await api('/api/update/apply', { method: 'POST' });
+    U.st = d.status;
+  } catch (e) { updateProgress({ apply_error: e.message }); return; }
+  pollUpdate(l.version || l.tag_name.replace(/^v/, ''), Date.now());
+}
+function updateProgress(st) {
+  const body = $('#ucBody'); if (!body) return;
+  if (st.apply_error) {
+    body.innerHTML = `<div class="uc-note error">升级失败：${esc(st.apply_error)}</div>
+      <div class="uc-actions"><a class="btn btn-sm" href="${esc((U.st && U.st.latest || {}).html_url || '#')}" target="_blank" rel="noopener">手动下载</a><button class="btn btn-sm btn-primary" data-u="apply">重试</button></div>`;
+    return;
+  }
+  const pct = st.total ? Math.min(100, Math.round(st.downloaded / st.total * 100)) : 0;
+  const text = st.restarting ? '正在重启，完成后页面会自动刷新…'
+    : st.stage === '下载新版本' && st.total ? `正在下载 ${pct}%（${fmtMB(st.downloaded)} / ${fmtMB(st.total)}）` : (st.stage || '准备中') + '…';
+  body.innerHTML = `<div class="uc-progress"><i style="width:${st.restarting ? 100 : st.stage === '下载新版本' ? pct : 8}%"></i></div><div class="uc-note">${esc(text)}</div>`;
+}
+function pollUpdate(target, started) {
+  clearTimeout(U.timer);
+  U.timer = setTimeout(async () => {
+    if (Date.now() - started > 15 * 60 * 1000) { updateProgress({ apply_error: '升级超时' }); return; }
+    let st = null;
+    try { st = (await api('/api/update/status')).status; } catch (_) {}
+    if (st && st.apply_error && !st.applying) { U.st = st; updateProgress(st); return; }
+    if (st && !st.restarting) { updateProgress(st); return pollUpdate(target, started); }
+    // Restarting (or the server is already down): wait for the new version.
+    updateProgress({ restarting: true });
+    waitForVersion(target, Date.now());
+  }, 800);
+}
+function waitForVersion(target, started) {
+  clearTimeout(U.timer);
+  U.timer = setTimeout(async () => {
+    try {
+      const c = await api('/api/config');
+      if (c.version === target) { toast(`已升级到 ${target}`); setTimeout(() => location.reload(), 600); return; }
+    } catch (_) {}
+    if (Date.now() - started > 90 * 1000) { updateProgress({ apply_error: '新版本已安装，但等待重启超时。请手动重新启动程序' }); return; }
+    waitForVersion(target, started);
+  }, 1000);
+}
+
 // ================================================================= THEME
 function applyTheme(t) {
   if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
@@ -1251,6 +1360,8 @@ async function boot() {
   refreshSyncStatus(); updateTodoBadge();
   setInterval(refreshSyncStatus, 30000);
   setInterval(updateTodoBadge, 120000);
+  setTimeout(maybeShowUpdate, 3000);
+  setInterval(maybeShowUpdate, 30 * 60 * 1000);
 }
 window.go = go;
 document.addEventListener('DOMContentLoaded', boot);

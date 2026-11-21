@@ -26,10 +26,13 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/config"
 	"github.com/qqshow/dingtalk-agent/internal/decrypt"
 	"github.com/qqshow/dingtalk-agent/internal/mcp"
+	"github.com/qqshow/dingtalk-agent/internal/update"
 	"github.com/qqshow/dingtalk-agent/internal/web"
 )
 
-var version = "1.0.0"
+// version is stamped by the release build (-X main.version=1.2.3); plain
+// builds report "dev" and are never prompted to update.
+var version = "dev"
 
 const usage = `dingtalk-agent %s — 钉钉聊天记录（V2/V3）解密 / 浏览 / Agent 接口
 
@@ -164,14 +167,24 @@ func serve(ctx context.Context, a *app.App) {
 	cfg := a.Cfg
 	m := mcp.New(a)
 	runner := ai.New(a)
-	handler := web.New(a, m, runner)
+	upd := update.New(version)
+	restartCh := make(chan struct{}, 1)
+	restart := func() {
+		select {
+		case restartCh <- struct{}{}:
+		default:
+		}
+	}
+	handler := web.New(a, m, runner, upd, restart)
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
 	a.Syncer.Schedule(ctx)
 	runner.Schedule(ctx)
+	upd.Schedule(ctx, cfg.AutoUpdateCheck)
+	update.CleanupOld()
 
-	ln, err := net.Listen("tcp", addr)
+	ln, err := listen(addr)
 	if err != nil {
 		fatal(fmt.Errorf("listen %s: %w (is another instance running?)", addr, err))
 	}
@@ -184,15 +197,46 @@ func serve(ctx context.Context, a *app.App) {
 		"sync_interval", cfg.Interval())
 	fmt.Fprintf(os.Stderr, "\n  网页:      %s\n  Agent API: %s/api/agent\n  MCP:       %s/mcp\n\n", base, base, base)
 
-	go func() {
-		<-ctx.Done()
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	shutdown := func() {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(sctx)
-	}()
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fatal(err)
 	}
+	select {
+	case <-ctx.Done():
+		shutdown()
+	case err := <-errc:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fatal(err)
+		}
+	case <-restartCh:
+		// An update was installed: release the port and start the new version.
+		shutdown()
+		a.Close()
+		fmt.Fprintln(os.Stderr, "\n  已升级到新版本，正在重启…")
+		if err := update.Restart(); err != nil {
+			fatal(fmt.Errorf("新版本已安装，但自动重启失败: %w。请手动重新启动程序", err))
+		}
+		os.Exit(0) // Windows: the new process has been started
+	}
+}
+
+// listen binds addr. A process started by an update retries for a while,
+// because the previous instance may still be releasing the port.
+func listen(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err == nil || os.Getenv(update.RestartEnv) == "" {
+		return ln, err
+	}
+	for i := 0; i < 40; i++ {
+		time.Sleep(500 * time.Millisecond)
+		if ln, err = net.Listen("tcp", addr); err == nil {
+			return ln, nil
+		}
+	}
+	return nil, err
 }
 
 func runMCP(ctx context.Context, a *app.App) {

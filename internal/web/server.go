@@ -24,20 +24,23 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/export"
 	"github.com/qqshow/dingtalk-agent/internal/store"
 	"github.com/qqshow/dingtalk-agent/internal/syncer"
+	"github.com/qqshow/dingtalk-agent/internal/update"
 )
 
 //go:embed static
 var staticFS embed.FS
 
 type Server struct {
-	a   *app.App
-	ai  *ai.Runner
-	mux *http.ServeMux
+	a       *app.App
+	ai      *ai.Runner
+	upd     *update.Updater
+	restart func() // restarts the process after an update is installed
+	mux     *http.ServeMux
 }
 
 // New builds the HTTP handler. mcp is mounted at /mcp when non-nil.
-func New(a *app.App, mcp http.Handler, runner *ai.Runner) http.Handler {
-	s := &Server{a: a, ai: runner, mux: http.NewServeMux()}
+func New(a *app.App, mcp http.Handler, runner *ai.Runner, upd *update.Updater, restart func()) http.Handler {
+	s := &Server{a: a, ai: runner, upd: upd, restart: restart, mux: http.NewServeMux()}
 	s.routes(mcp)
 	return s.guard(s.logging(s.mux))
 }
@@ -75,6 +78,9 @@ func (s *Server) routes(mcp http.Handler) {
 	m.HandleFunc("GET /api/local-file", s.apiLocalFile)
 
 	// Agent API.
+	m.HandleFunc("GET /api/update/status", s.apiUpdateStatus)
+	m.HandleFunc("POST /api/update/check", s.apiUpdateCheck)
+	m.HandleFunc("POST /api/update/apply", s.apiUpdateApply)
 	m.HandleFunc("GET /api/ai/settings", s.apiAIGetSettings)
 	m.HandleFunc("PUT /api/ai/settings", s.apiAIPutSettings)
 	m.HandleFunc("POST /api/ai/test", s.apiAITest)
@@ -354,6 +360,7 @@ func (s *Server) settings(r *http.Request) map[string]any {
 	base := "http://" + r.Host
 	return map[string]any{
 		"sync_interval_minutes": int(cfg.Interval() / time.Minute),
+		"auto_update_check":     cfg.AutoUpdateCheck(),
 		"sync":                  s.a.Syncer.State(),
 		"uid":                   cfg.UID(),
 		"dingtalk_dir":          cfg.DingTalkDir(),
@@ -370,11 +377,18 @@ func (s *Server) apiGetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiPutSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		SyncIntervalMinutes *int `json:"sync_interval_minutes"`
+		SyncIntervalMinutes *int  `json:"sync_interval_minutes"`
+		AutoUpdateCheck     *bool `json:"auto_update_check"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, 400, err)
 		return
+	}
+	if body.AutoUpdateCheck != nil {
+		if err := s.a.Cfg.SetAutoUpdateCheck(*body.AutoUpdateCheck); err != nil {
+			writeErr(w, 500, err)
+			return
+		}
 	}
 	if body.SyncIntervalMinutes != nil {
 		m := *body.SyncIntervalMinutes

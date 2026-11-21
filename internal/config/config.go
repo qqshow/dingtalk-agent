@@ -31,6 +31,8 @@ type Config struct {
 	uid             string // real numeric DingTalk UID
 	intervalChanged bool   // SyncInterval was changed at runtime → persist it
 	aiChanged       bool   // AI settings were changed at runtime → persist them
+	autoUpdate      bool   // check GitHub for new releases
+	updateChanged   bool
 }
 
 // persisted is the on-disk shape of data/config.json.
@@ -41,6 +43,7 @@ type persisted struct {
 	Port                int       `json:"port,omitempty"`
 	SyncIntervalMinutes *int      `json:"sync_interval_minutes,omitempty"`
 	AI                  *AIConfig `json:"ai,omitempty"`
+	AutoUpdateCheck     *bool     `json:"auto_update_check,omitempty"`
 }
 
 // AIConfig configures the built-in AI assistant (any OpenAI-compatible API).
@@ -137,6 +140,21 @@ func (c *Config) SetAI(a AIConfig) error {
 	return c.save()
 }
 
+// AutoUpdateCheck reports whether to check GitHub for new releases.
+func (c *Config) AutoUpdateCheck() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.autoUpdate
+}
+
+// SetAutoUpdateCheck turns the release check on or off and persists it.
+func (c *Config) SetAutoUpdateCheck(on bool) error {
+	c.mu.Lock()
+	c.autoUpdate, c.updateChanged = on, true
+	c.mu.Unlock()
+	return c.save()
+}
+
 // SetAccount updates the active account and persists it to config.json.
 func (c *Config) SetAccount(dir, uid string) error {
 	c.mu.Lock()
@@ -180,6 +198,7 @@ func Load(o Overrides) (*Config, error) {
 		Port:         8090,
 		SyncInterval: 30 * time.Minute,
 		ai:           DefaultAIConfig(),
+		autoUpdate:   true,
 	}
 	if c.DataDir == "" {
 		c.DataDir = DefaultDataDir()
@@ -208,6 +227,9 @@ func Load(o Overrides) (*Config, error) {
 	}
 	if p.AI != nil {
 		c.ai = *p.AI
+	}
+	if p.AutoUpdateCheck != nil {
+		c.autoUpdate = *p.AutoUpdateCheck
 	}
 
 	if v := strings.TrimSpace(os.Getenv("DINGTALK_UID")); v != "" {
@@ -240,12 +262,14 @@ func (c *Config) save() error {
 	p := persisted{UID: c.uid, DingTalkDir: c.dingTalkDir}
 	changed, minutes := c.intervalChanged, int(c.SyncInterval/time.Minute)
 	aiChanged, ai := c.aiChanged, c.ai
+	updChanged, upd := c.updateChanged, c.autoUpdate
 	c.mu.RUnlock()
 	// Preserve fields we do not manage here.
 	if b, err := os.ReadFile(c.configPath()); err == nil {
 		var old persisted
 		if json.Unmarshal(b, &old) == nil {
 			p.Host, p.Port, p.SyncIntervalMinutes, p.AI = old.Host, old.Port, old.SyncIntervalMinutes, old.AI
+			p.AutoUpdateCheck = old.AutoUpdateCheck
 		}
 	}
 	if changed {
@@ -253,6 +277,9 @@ func (c *Config) save() error {
 	}
 	if aiChanged {
 		p.AI = &ai
+	}
+	if updChanged {
+		p.AutoUpdateCheck = &upd
 	}
 	b, _ := json.MarshalIndent(p, "", "  ")
 	tmp := c.configPath() + ".tmp"
