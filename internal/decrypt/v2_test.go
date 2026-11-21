@@ -18,10 +18,12 @@ func TestDeriveKeyV2(t *testing.T) {
 }
 
 func TestIsV2(t *testing.T) {
+	// Native separators: a backslash is an ordinary filename character on Unix.
+	base := filepath.Join("home", "x", "DingTalk")
 	for dir, want := range map[string]bool{
-		`C:\Users\x\AppData\Roaming\DingTalk\69465484_v2`:  true,
-		`C:\Users\x\AppData\Roaming\DingTalk\69465484_V2\`: true,
-		`/home/x/.config/DingTalk/6d1a39593362a4786954_v3`: false,
+		filepath.Join(base, "69465484_v2"):                              true,
+		filepath.Join(base, "69465484_V2") + string(filepath.Separator): true,
+		filepath.Join(base, "0123456789abcdef_v3"):                      false,
 	} {
 		if IsV2(dir) != want {
 			t.Errorf("IsV2(%q) = %v", dir, !want)
