@@ -557,15 +557,32 @@ func verifyBinary(ctx context.Context, bin, want string) error {
 // Renaming a running executable is allowed on Windows and Unix.
 func swap(exe, newPath string) error {
 	old := exe + ".old"
-	os.Remove(old)
-	if err := os.Rename(exe, old); err != nil {
+	removeRetry(old)
+	if err := renameRetry(exe, old); err != nil {
 		return fmt.Errorf("无法替换程序文件: %w", err)
 	}
-	if err := os.Rename(newPath, exe); err != nil {
-		os.Rename(old, exe)
+	if err := renameRetry(newPath, exe); err != nil {
+		renameRetry(old, exe)
 		return fmt.Errorf("无法替换程序文件: %w", err)
 	}
 	return nil
+}
+
+// renameRetry renames, retrying for up to ~20 seconds. On Windows a file that
+// was just written or executed is often held open briefly by antivirus
+// scanning (Defender), which makes the rename fail with a sharing violation.
+func renameRetry(from, to string) error {
+	var err error
+	for i := 0; i < 80; i++ {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		if os.IsNotExist(err) {
+			return err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return err
 }
 
 // removeRetry deletes path, retrying briefly: on Windows a program that was

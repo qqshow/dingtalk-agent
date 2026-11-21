@@ -52,7 +52,7 @@ type Event struct {
 type Request struct {
 	SessionID int64    `json:"session_id"`
 	Text      string   `json:"text"`
-	Mentions  []string `json:"mentions"` // conversation ids
+	Mentions  []string `json:"mentions"` // conversation ids, or "u:<uid>" for a contact
 	Days      int      `json:"days"`     // time range for @mention context (default 7)
 }
 
@@ -239,6 +239,11 @@ func (s *Service) systemPrompt(snap *store.Snapshot, tools bool) string {
 		b.WriteString("- 资料不足时调用工具查询：按名称查会话用 dingtalk_list_conversations，读某个会话的消息用 dingtalk_get_messages，" +
 			"关键字查找用 dingtalk_search，某天或某段时间的整体情况用 dingtalk_daily_report / dingtalk_daily_digest，日程用 dingtalk_calendar，待办用 dingtalk_list_todos。\n")
 		b.WriteString("- 用户要求记下待办或需要跟踪的事时，调用 dingtalk_add_todos 写入，并说明写入了哪些事项；不要未经要求就写入。\n")
+		b.WriteString("- 用户问某个问题以前是怎么解决的、某件事的来龙去脉、谁熟悉某方面、某个文件或链接在哪时，把聊天记录当作知识库来查：" +
+			"用 dingtalk_search 在全部历史中搜索（不限日期），换几个关键词多搜几次（同义词、报错信息里的关键片段、产品或模块名、较短的词）；" +
+			"找到相关消息后，用 dingtalk_get_messages 读取那个会话在当天（必要时前后几天）的消息，弄清前因后果。" +
+			"回答时按「问题现象 → 原因 → 解决办法 → 谁处理的 → 什么时候」整理，注明出处（会话名和时间）；" +
+			"有多次类似问题时分别列出；搜不到就如实说明，并建议用户换个说法或 @ 可能相关的群。\n")
 	} else {
 		b.WriteString("- 你无法调用工具，只能根据引用资料回答；资料不足时请提示用户 @ 相关的人或群，或调整时间范围。\n")
 	}
@@ -261,7 +266,12 @@ func userContent(m agentdb.ChatMessage, withContext bool) string {
 func (s *Service) buildMessages(snap *store.Snapshot, history []agentdb.ChatMessage, cur agentdb.ChatMessage, tools bool) []ai.ChatMessage {
 	sys := s.systemPrompt(snap, tools)
 	curContent := userContent(cur, true)
-	if !tools && strings.TrimSpace(cur.Context) == "" && len(history) == 0 {
+	if !tools {
+		if hits := keywordContext(snap, cur.Content); hits != "" {
+			curContent = "【引用资料：按问题中的关键词搜索到的聊天记录】\n" + hits + "\n\n" + curContent
+		}
+	}
+	if !tools && strings.TrimSpace(cur.Context) == "" && len(history) == 0 && !strings.Contains(curContent, "【引用资料") {
 		// Without tools the model would know nothing: give it today's overview.
 		if d, err := s.a.Digest("today", "", "", analysis.DigestOptions{Scope: "involved", SkipBots: true, MaxChars: 20000}, false); err == nil {
 			curContent = "【引用资料：今天与我相关的消息摘要】\n" + d.Markdown + "\n\n【问题】\n" + cur.Content
@@ -296,6 +306,51 @@ func (s *Service) buildMessages(snap *store.Snapshot, history []agentdb.ChatMess
 		out = append(out, turns[i])
 	}
 	return append(out, ai.ChatMessage{Role: "user", Content: curContent})
+}
+
+// keywordContext searches the whole history for terms the user put in
+// 「」 or quotes; used when the model cannot call the search tool itself.
+func keywordContext(snap *store.Snapshot, text string) string {
+	terms := quotedTerms(text)
+	var b strings.Builder
+	for _, t := range terms {
+		msgs, _ := snap.Range(store.RangeQuery{Keyword: t, Desc: true, Limit: 80})
+		found, n := newestWithin(snap, msgs, 12000, true)
+		if n == 0 {
+			fmt.Fprintf(&b, "### 搜索「%s」\n（没有找到）\n\n", t)
+			continue
+		}
+		fmt.Fprintf(&b, "### 搜索「%s」（%d 条，按时间排列）\n%s\n\n", t, n, found)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// quotedTerms returns up to 3 terms quoted with 「」, “” or "".
+func quotedTerms(text string) []string {
+	var terms []string
+	for _, pair := range [][2]string{{"「", "」"}, {"\u201c", "\u201d"}, {`"`, `"`}} {
+		rest := text
+		for {
+			i := strings.Index(rest, pair[0])
+			if i < 0 {
+				break
+			}
+			rest = rest[i+len(pair[0]):]
+			j := strings.Index(rest, pair[1])
+			if j < 0 {
+				break
+			}
+			t := strings.TrimSpace(rest[:j])
+			if t != "" && len([]rune(t)) <= 40 && strings.Trim(t, "…. ") != "" {
+				terms = append(terms, t)
+			}
+			rest = rest[j+len(pair[1]):]
+		}
+	}
+	if len(terms) > 3 {
+		terms = terms[:3]
+	}
+	return terms
 }
 
 // --------------------------------------------------------------- mentions
@@ -346,20 +401,60 @@ func newestWithin(snap *store.Snapshot, msgs []*store.Message, budget int, withC
 	return strings.Join(lines, "\n"), len(lines)
 }
 
-// mentionContext loads recent messages for each @-mentioned conversation:
-// for a person, our single chat plus what they said in groups; for a group,
-// the group's messages.
-func mentionContext(snap *store.Snapshot, cids []string, days int, now time.Time) ([]agentdb.Mention, string) {
-	var mentions []agentdb.Mention
-	var valid []*store.Conversation
+// target is a resolved @mention.
+type target struct {
+	key  string // what the page sent: a cid or "u:<uid>"
+	conv *store.Conversation
+	uid  int64  // person
+	name string //
+}
+
+// resolveMentions turns mention keys into targets. A key is a conversation
+// id, or "u:<uid>" for a contact (who may have no single chat with us).
+func resolveMentions(snap *store.Snapshot, keys []string) []target {
+	var out []target
 	seen := map[string]bool{}
-	for _, cid := range cids {
-		if c := snap.ConvByID[cid]; c != nil && !seen[cid] {
-			seen[cid] = true
-			valid = append(valid, c)
+	for _, key := range keys {
+		var t target
+		if strings.HasPrefix(key, "u:") {
+			uid, err := strconv.ParseInt(strings.TrimPrefix(key, "u:"), 10, 64)
+			if err != nil || uid <= 0 || snap.IsBot(uid) {
+				continue
+			}
+			t = target{key: key, uid: uid, name: snap.UserName("", uid)}
+			if cid := snap.SingleCIDFor(uid); cid != "" {
+				t.conv = snap.ConvByID[cid]
+			}
+		} else {
+			c := snap.ConvByID[key]
+			if c == nil {
+				continue
+			}
+			t = target{key: key, conv: c, name: c.Title}
+			if c.Type == "single" {
+				t.uid, _ = strconv.ParseInt(c.OtherUID, 10, 64)
+			}
+		}
+		id := t.key
+		if t.uid > 0 {
+			id = "u:" + strconv.FormatInt(t.uid, 10)
+		} else if t.conv != nil {
+			id = t.conv.CID
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, t)
 		}
 	}
-	if len(valid) == 0 {
+	return out
+}
+
+// mentionContext loads recent messages for each @mention. For a person: our
+// single chat (if any), what they said in groups, and — when there is no
+// single chat — group messages that @ them. For a group: its messages.
+func mentionContext(snap *store.Snapshot, keys []string, days int, now time.Time) ([]agentdb.Mention, string) {
+	targets := resolveMentions(snap, keys)
+	if len(targets) == 0 {
 		return nil, ""
 	}
 	y, mo, d := now.Date()
@@ -369,36 +464,13 @@ func mentionContext(snap *store.Snapshot, cids []string, days int, now time.Time
 	if days == 1 {
 		label = "今天"
 	}
-	per := mentionBudget / len(valid)
+	per := mentionBudget / len(targets)
 
+	var mentions []agentdb.Mention
 	var b strings.Builder
-	for _, c := range valid {
-		if c.Type == "single" {
-			mentions = append(mentions, agentdb.Mention{CID: c.CID, Title: c.Title, Kind: "person"})
-			fmt.Fprintf(&b, "### @%s（单聊，%s）\n", c.Title, label)
-			qq := q
-			qq.CIDs, qq.Limit = []string{c.CID}, 800
-			msgs, _ := snap.Range(qq)
-			text, n := newestWithin(snap, msgs, per*2/3, false)
-			if n == 0 {
-				text = "（这段时间没有单聊消息）"
-			}
-			b.WriteString(text + "\n")
-			if uid, err := strconv.ParseInt(c.OtherUID, 10, 64); err == nil && uid > 0 {
-				qq = q
-				qq.SenderID, qq.Limit = uid, 600
-				all, _ := snap.Range(qq)
-				var inGroups []*store.Message
-				for _, m := range all {
-					if m.CID != c.CID {
-						inGroups = append(inGroups, m)
-					}
-				}
-				if text, n := newestWithin(snap, inGroups, per/3, true); n > 0 {
-					fmt.Fprintf(&b, "\n%s 在群里的发言：\n%s\n", c.Title, text)
-				}
-			}
-		} else {
+	for _, t := range targets {
+		if t.uid == 0 { // group
+			c := t.conv
 			mentions = append(mentions, agentdb.Mention{CID: c.CID, Title: c.Title, Kind: "group"})
 			kind := "群聊"
 			if c.IsProject {
@@ -412,7 +484,60 @@ func mentionContext(snap *store.Snapshot, cids []string, days int, now time.Time
 			if n == 0 {
 				text = "（这段时间没有消息）"
 			}
+			b.WriteString(text + "\n\n")
+			continue
+		}
+
+		m := agentdb.Mention{CID: t.key, Title: t.name, Kind: "person"}
+		if t.conv != nil {
+			m.CID = t.conv.CID
+		}
+		mentions = append(mentions, m)
+		groupBudget := per / 3
+		if t.conv != nil {
+			fmt.Fprintf(&b, "### @%s（单聊，%s）\n", t.name, label)
+			qq := q
+			qq.CIDs, qq.Limit = []string{t.conv.CID}, 800
+			msgs, _ := snap.Range(qq)
+			text, n := newestWithin(snap, msgs, per*2/3, false)
+			if n == 0 {
+				text = "（这段时间没有单聊消息）"
+			}
 			b.WriteString(text + "\n")
+		} else {
+			fmt.Fprintf(&b, "### @%s（我和他没有单聊，以下是他在群里的发言和群里 @ 他的消息，%s）\n", t.name, label)
+			groupBudget = per * 2 / 3
+		}
+
+		qq := q
+		qq.SenderID, qq.Limit = t.uid, 600
+		all, _ := snap.Range(qq)
+		var inGroups []*store.Message
+		for _, msg := range all {
+			if t.conv == nil || msg.CID != t.conv.CID {
+				inGroups = append(inGroups, msg)
+			}
+		}
+		text, n := newestWithin(snap, inGroups, groupBudget, true)
+		if n > 0 {
+			fmt.Fprintf(&b, "\n%s 在群里的发言：\n%s\n", t.name, text)
+		} else if t.conv == nil {
+			b.WriteString("（这段时间他没有在群里发言）\n")
+		}
+
+		if t.conv == nil && t.name != "" {
+			qq := q
+			qq.Keyword, qq.Limit = "@"+t.name, 300
+			hits, _ := snap.Range(qq)
+			var atHim []*store.Message
+			for _, msg := range hits {
+				if msg.SenderID != t.uid {
+					atHim = append(atHim, msg)
+				}
+			}
+			if text, n := newestWithin(snap, atHim, per/3, true); n > 0 {
+				fmt.Fprintf(&b, "\n群里 @%s 的消息：\n%s\n", t.name, text)
+			}
 		}
 		b.WriteString("\n")
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/qqshow/dingtalk-agent/internal/chat"
+	"github.com/qqshow/dingtalk-agent/internal/store"
 )
 
 func pathID(r *http.Request) (int64, error) {
@@ -78,6 +79,36 @@ func (s *Server) apiChatDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// apiChatPeople searches contacts for @mentions, including people we only
+// know from groups (no single chat).
+func (s *Server) apiChatPeople(w http.ResponseWriter, r *http.Request) {
+	snap := s.snap(w)
+	if snap == nil {
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	q := r.URL.Query().Get("q")
+	if r.URL.Query().Get("no_chat") != "1" {
+		writeJSON(w, 200, map[string]any{"people": snap.SearchPeople(q, limit)})
+		return
+	}
+	// Only people we have no single chat with: the page already lists
+	// single chats from the conversation list.
+	out := []store.Person{}
+	for _, p := range snap.SearchPeople(q, 100000) {
+		if p.CID == "" {
+			out = append(out, p)
+			if len(out) == limit {
+				break
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{"people": out})
 }
 
 // apiChatSend answers a message as a server-sent event stream. Closing the

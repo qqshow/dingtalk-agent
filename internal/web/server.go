@@ -85,6 +85,7 @@ func (s *Server) routes(mcp http.Handler) {
 	m.HandleFunc("PATCH /api/chat/sessions/{id}", s.apiChatRename)
 	m.HandleFunc("DELETE /api/chat/sessions/{id}", s.apiChatDelete)
 	m.HandleFunc("POST /api/chat/send", s.apiChatSend)
+	m.HandleFunc("GET /api/chat/people", s.apiChatPeople)
 	m.HandleFunc("GET /api/update/status", s.apiUpdateStatus)
 	m.HandleFunc("POST /api/update/check", s.apiUpdateCheck)
 	m.HandleFunc("POST /api/update/apply", s.apiUpdateApply)

@@ -778,11 +778,21 @@ function renderAIProgress(date) {
 
 // ================================================================ AI CHAT
 const AC = { session: 0, sessions: [], mentions: new Map(), streaming: null, pop: { items: [], idx: 0 } };
+// Prompts with a 「…」 placeholder are filled into the input with the
+// placeholder selected, instead of being sent right away.
 const AI_SUGGESTIONS = [
-  ['总结今天的工作', '帮我总结一下今天的工作：做了什么、有哪些进展、还有什么没处理完'],
-  ['答应别人的事', '最近一周我答应过别人、但还没完成的事情有哪些？'],
-  ['需要回复的消息', '有哪些消息在等我回复？按紧急程度排序，并帮我起草回复'],
-  ['明天的安排', '结合明天的日程和未完成的待办，帮我安排一下明天的工作'],
+  ['我的工作', [
+    ['总结今天的工作', '帮我总结一下今天的工作：做了什么、有哪些进展、还有什么没处理完'],
+    ['答应别人的事', '最近一周我答应过别人、但还没完成的事情有哪些？'],
+    ['需要回复的消息', '有哪些消息在等我回复？按紧急程度排序，并帮我起草回复'],
+    ['明天的安排', '结合明天的日程和未完成的待办，帮我安排一下明天的工作'],
+  ]],
+  ['从聊天记录里找答案', [
+    ['问题怎么解决的', '之前「问题或报错关键词」是怎么解决的？原因是什么、谁处理的？'],
+    ['来龙去脉', '「项目或事情」的来龙去脉：什么时候开始的、有哪些关键决定、现在进展到哪了？'],
+    ['谁熟悉这块', '谁比较熟悉「技术或业务」？之前都是谁在处理相关的问题？'],
+    ['找文件或链接', '之前有人发过「文档、链接或安装包」吗？在哪个群、谁发的？'],
+  ]],
 ];
 
 async function viewAI(r, alive) {
@@ -799,7 +809,7 @@ async function viewAI(r, alive) {
       <div class="ai-msgs" id="aiMsgs"></div>
       <div class="ai-composer">
         <div class="ai-input-wrap">
-          <textarea id="aiInput" rows="1" placeholder="问问 AI，可以 @ 某人或某群，例如：@项目群 这周有什么风险？"></textarea>
+          <textarea id="aiInput" rows="1" placeholder="问问 AI，例如：之前「数据库连接超时」是怎么解决的？也可以 @ 某人或某群"></textarea>
           <div class="mention-pop" id="mentionPop" hidden></div>
         </div>
         <div class="ai-bar">
@@ -834,9 +844,19 @@ function renderAIEmpty(st) {
   }
   box.innerHTML = `<div class="ai-welcome"><div class="ai-logo">${icon('spark')}</div><h2>有什么可以帮你？</h2>
     <p class="muted">AI 可以查阅你的聊天记录、日程和待办。输入 <b>@</b> 选择某人或某群，会附上与他们的聊天记录。</p>
-    <div class="ai-suggest">${AI_SUGGESTIONS.map(([t, q]) => `<button class="ai-sg" data-q="${esc(q)}"><b>${esc(t)}</b><span>${esc(q)}</span></button>`).join('')}</div>
+    ${AI_SUGGESTIONS.map(([group, items]) => `<div class="ai-sg-group">${esc(group)}</div>
+      <div class="ai-suggest">${items.map(([t, q]) => `<button class="ai-sg" data-q="${esc(q)}"><b>${esc(t)}</b><span>${esc(q)}</span></button>`).join('')}</div>`).join('')}
     <p class="muted ai-privacy">🔒 你提问时，相关的聊天内容会发送给你配置的模型服务商。</p></div>`;
-  box.onclick = e => { const b = e.target.closest('.ai-sg'); if (b) { $('#aiInput').value = b.dataset.q; sendAI(); } };
+  box.onclick = e => {
+    const b = e.target.closest('.ai-sg'); if (!b) return;
+    const q = b.dataset.q, input = $('#aiInput');
+    input.value = q;
+    const i = q.indexOf('「'), j = q.indexOf('」');
+    if (i < 0 || j < i) { sendAI(); return; }
+    input.focus();
+    input.setSelectionRange(i + 1, j); // select the placeholder so typing replaces it
+    input.dispatchEvent(new Event('input'));
+  };
 }
 
 async function refreshSessions() {
@@ -877,7 +897,8 @@ function highlightMentions(text, mentions) {
   let h = esc(text);
   for (const m of (mentions || [])) {
     const t = esc('@' + m.title);
-    h = h.split(t).join(`<span class="ai-at ${m.kind === 'group' ? 'grp' : ''}" data-cid="${esc(m.cid)}">${t}</span>`);
+    const link = m.cid && !m.cid.startsWith('u:') ? ` data-cid="${esc(m.cid)}"` : '';
+    h = h.split(t).join(`<span class="ai-at ${m.kind === 'group' ? 'grp' : ''}"${link}>${t}</span>`);
   }
   return h;
 }
@@ -935,7 +956,7 @@ function bindComposer(st) {
         if (m) navigator.clipboard.writeText(m.content).then(() => toast('已复制'));
       });
     }
-    const at = e.target.closest('.ai-at');
+    const at = e.target.closest('.ai-at[data-cid]');
     if (at) go(`#/chat/${encodeURIComponent(at.dataset.cid)}`);
   });
 }
@@ -945,20 +966,44 @@ function mentionQuery() {
   const m = before.match(/@([^\s@]{0,24})$/);
   return m ? { q: m[1], start: before.length - m[0].length } : null;
 }
+// The @ list: matching conversations (groups and people we chat with), plus
+// contacts we only know from groups, fetched from the server as you type.
+let peopleTimer = 0, peopleSeq = 0;
 function updateMentionPop() {
   const pop = $('#mentionPop'), mq = mentionQuery();
   if (!mq) { pop.hidden = true; return; }
   const q = mq.q.toLowerCase();
   const list = S.convs.filter(c => !c.is_notification && !c.is_bot && c.title && (!q || c.title.toLowerCase().includes(q)));
   list.sort((a, b) => (b.title.toLowerCase().startsWith(q) - a.title.toLowerCase().startsWith(q)) || (b.last_modify - a.last_modify));
-  AC.pop.items = list.slice(0, 8); AC.pop.idx = 0;
-  if (!AC.pop.items.length) { pop.hidden = true; return; }
+  const local = list.slice(0, q ? 6 : 8);
+  showMentionItems(local);
+  clearTimeout(peopleTimer);
+  if (!q) return;
+  const seq = ++peopleSeq;
+  peopleTimer = setTimeout(async () => {
+    let people = [];
+    try { people = (await api(`/api/chat/people?q=${encodeURIComponent(mq.q)}&no_chat=1&limit=${10 - local.length}`)).people; } catch (_) {}
+    const now = mentionQuery();
+    if (seq !== peopleSeq || !now || now.q !== mq.q) return;
+    const extra = people.filter(p => !p.cid).slice(0, 10 - local.length)
+      .map(p => ({ kind: 'user', uid: String(p.uid), title: p.name }));
+    if (extra.length) showMentionItems([...local, ...extra], true);
+  }, 150);
+}
+function showMentionItems(items, keepIdx = false) {
+  const pop = $('#mentionPop');
+  AC.pop.items = items;
+  if (!keepIdx || AC.pop.idx >= items.length) AC.pop.idx = 0;
+  if (!items.length) { pop.hidden = true; return; }
   renderMentionPop(); pop.hidden = false;
 }
 function renderMentionPop() {
-  $('#mentionPop').innerHTML = AC.pop.items.map((c, i) => `<div class="mp-item ${i === AC.pop.idx ? 'active' : ''}" data-i="${i}">
-    ${convAvatar(c, 'xs')}<span class="mp-title">${esc(c.title)}</span>
-    <span class="tag ${c.type === 'group' ? (c.is_project ? 'tag-purple' : 'tag-orange') : 'tag-blue'}">${c.type === 'group' ? (c.is_project ? '项目群' : '群') : '人'}</span></div>`).join('');
+  $('#mentionPop').innerHTML = AC.pop.items.map((c, i) => {
+    const av = c.kind === 'user' ? avatar(c.title, { size: 'xs', seed: c.uid }) : convAvatar(c, 'xs');
+    const tag = c.kind === 'user' ? '<span class="tag" title="没有单聊，会附上他在群里的发言">人 · 群成员</span>'
+      : `<span class="tag ${c.type === 'group' ? (c.is_project ? 'tag-purple' : 'tag-orange') : 'tag-blue'}">${c.type === 'group' ? (c.is_project ? '项目群' : '群') : '人'}</span>`;
+    return `<div class="mp-item ${i === AC.pop.idx ? 'active' : ''}" data-i="${i}">${av}<span class="mp-title">${esc(c.title)}</span>${tag}</div>`;
+  }).join('');
 }
 function insertMention(c, append = false) {
   if (!c) return;
@@ -973,7 +1018,7 @@ function insertMention(c, append = false) {
     const caret = mq.start + token.length;
     input.setSelectionRange(caret, caret);
   }
-  AC.mentions.set(c.title, c.cid);
+  AC.mentions.set(c.title, c.kind === 'user' ? 'u:' + c.uid : c.cid);
   $('#mentionPop').hidden = true;
   input.focus();
   input.dispatchEvent(new Event('input'));
