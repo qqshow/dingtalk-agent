@@ -10,10 +10,9 @@ import (
 // Supported reports whether this build can show a native window.
 func Supported() bool { return false }
 
-// Detached is always false: without a native window the terminal is kept.
-func Detached() bool { return false }
+// Prepare is a no-op here and reports false: the terminal is kept.
+func Prepare() bool { return false }
 
-func HideConsole()       {}
 func AllowForeground()   {}
 func OpenBrowser(string) {}
 func Show()              {}

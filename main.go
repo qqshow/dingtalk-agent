@@ -58,6 +58,7 @@ const usage = `dingtalk-agent %s — 钉钉聊天记录（V2/V3）解密 / 浏�
 `
 
 func main() {
+	detached := desktop.Prepare() // before anything is printed
 	args := os.Args[1:]
 	cmd := "serve"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -78,7 +79,7 @@ func main() {
 	to := fs.String("to", "", "区间结束日期（report/digest）")
 	scope := fs.String("scope", "all", "digest 范围: all | involved")
 	verbose := fs.Bool("v", false, "输出调试日志")
-	noWindow := fs.Bool("no-window", false, "双击启动时也不打开窗口和托盘图标（Windows）")
+	noWindow := fs.Bool("no-window", false, "双击启动时不打开窗口和托盘图标，只在后台运行（Windows）")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), usage, version)
 		fs.PrintDefaults()
@@ -110,9 +111,8 @@ func main() {
 		return
 	}
 
-	if cmd == "serve" && !*noWindow && os.Getenv("DINGTALK_AGENT_NO_WINDOW") == "" && desktop.Detached() {
+	if detached && cmd == "serve" && !*noWindow && os.Getenv("DINGTALK_AGENT_NO_WINDOW") == "" {
 		guiMode = true
-		desktop.HideConsole()
 	}
 
 	cfg, err := config.Load(o)

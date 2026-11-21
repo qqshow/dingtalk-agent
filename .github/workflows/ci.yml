@@ -77,7 +77,11 @@ jobs:
           bin="dingtalk-agent"
           if [[ "$GOOS" == "windows" ]]; then bin="dingtalk-agent.exe"; fi
           mkdir -p dist "build/${name}"
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "build/${name}/${bin}" .
+          ldflags="-s -w -X main.version=${VERSION}"
+          # GUI subsystem: double-clicking opens the window without a console
+          # flashing up; terminal use attaches to the console (desktop.Prepare).
+          if [[ "$GOOS" == "windows" ]]; then ldflags="$ldflags -H windowsgui"; fi
+          go build -trimpath -ldflags "$ldflags" -o "build/${name}/${bin}" .
           cp LICENSE THIRD_PARTY_NOTICES.md README.md "build/${name}/"
           if [[ "$GOOS" == "windows" ]]; then
             (cd build && zip -r -9 "../dist/${name}.zip" "${name}")

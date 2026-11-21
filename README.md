@@ -86,8 +86,9 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 - **再次双击 exe**：不会重复启动，而是把已有的窗口切到前台
 - 窗口大小和位置会被记住
 
-从命令行（cmd / PowerShell / Windows Terminal）运行 `.\dingtalk-agent.exe` 时，则和以前一样在终端里运行，不打开窗口，
-用浏览器访问 <http://localhost:8090>。双击时也不想打开窗口，可以加 `-no-window` 参数（例如写在快捷方式里）。
+从命令行（cmd / PowerShell / Windows Terminal）运行 `.\dingtalk-agent.exe` 时，则在终端里运行，不打开窗口，
+用浏览器访问 <http://localhost:8090>。想让它在后台运行、不要窗口和托盘图标，可以在快捷方式里加 `-no-window` 参数
+（这时没有任何界面，用浏览器访问，退出要在任务管理器里结束进程）。
 
 电脑上没有 WebView2 时（Win11 和已更新 Edge 的 Win10 都自带），程序会自动改用默认浏览器打开页面。
 
@@ -138,13 +139,18 @@ dingtalk-agent digest -from 2026-11-16 -to 2026-11-20    一段时间的摘要
 dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 ```
 
+> Windows 版是窗口程序（这样双击时不会闪出黑色的控制台窗口）。在 cmd / PowerShell 里直接运行时，输出照常显示在当前终端，
+> 但终端不会等它结束，命令提示符可能先出现、输出跟在后面，按一下回车即可。需要等它结束（例如在脚本里）时，
+> 用 `start /wait dingtalk-agent.exe report` 或在 PowerShell 里加 `| Out-Host`；重定向到文件（`> report.json`）和管道不受影响。
+> Agent 通过 stdio 运行 `dingtalk-agent mcp` 也不受影响。
+
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `-port` | `8090` | 监听端口 |
 | `-host` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 会把聊天记录暴露到局域网，请谨慎 |
 | `-sync-interval` | `30` | 自动同步间隔（分钟，`0` 表示关闭）。指定后会覆盖网页上的设置 |
 | `-uid` | 自动识别 | 钉钉数字 UID |
-| `-no-window` | | Windows 上双击启动时也不打开窗口和托盘图标 |
+| `-no-window` | | Windows 上双击启动时不打开窗口和托盘图标，只在后台运行 |
 | `-dingtalk-dir` | 自动查找 | 账号目录，以 `<hash>_v3` 或 `<uid>_v2` 结尾 |
 | `-data` | `<程序目录>/data` | 本地数据目录 |
 
@@ -358,7 +364,8 @@ data/
 ```bash
 git clone https://github.com/qqshow/dingtalk-agent.git
 cd dingtalk-agent
-go build -ldflags "-s -w" -o dingtalk-agent.exe .   # Linux/macOS 下可去掉 .exe 后缀
+go build -ldflags "-s -w -H windowsgui" -o dingtalk-agent.exe .   # Windows（窗口程序，双击不闪控制台）
+go build -ldflags "-s -w" -o dingtalk-agent .                      # Linux / macOS
 go test ./...
 ```
 

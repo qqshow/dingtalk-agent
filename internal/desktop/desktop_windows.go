@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"fyne.io/systray"
 	webview2 "github.com/jchv/go-webview2"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 //go:embed icon.ico
@@ -25,11 +27,16 @@ var iconICO []byte
 
 var (
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
-	user32   = windows.NewLazySystemDLL("user32.dll")
+	dwmapi   = windows.NewLazySystemDLL("dwmapi.dll")
+
+	pDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+	pSetWindowPos          = user32.NewProc("SetWindowPos")
+	user32                 = windows.NewLazySystemDLL("user32.dll")
 
 	pGetConsoleWindow      = kernel32.NewProc("GetConsoleWindow")
 	pGetConsoleProcessList = kernel32.NewProc("GetConsoleProcessList")
 	pFreeConsole           = kernel32.NewProc("FreeConsole")
+	pAttachConsole         = kernel32.NewProc("AttachConsole")
 
 	pMessageBoxW                   = user32.NewProc("MessageBoxW")
 	pShowWindow                    = user32.NewProc("ShowWindow")
@@ -71,23 +78,71 @@ const (
 // Supported reports whether this build can show a native window.
 func Supported() bool { return true }
 
-// Detached reports whether the program was started without a terminal of its
-// own, e.g. by double-clicking the exe in Explorer (the console window was
-// created just for this process) or by a restart without any console.
-// Started from cmd/PowerShell/Windows Terminal, the console is shared with
-// the shell and this returns false.
-func Detached() bool {
-	if h, _, _ := pGetConsoleWindow.Call(); h == 0 {
+// Prepare sets up the standard streams and reports whether the program was
+// started without a terminal of its own, e.g. by double-clicking the exe.
+// It must run before anything is printed.
+//
+// Release builds use the GUI subsystem (-H windowsgui) so double-clicking
+// does not flash a console window. Then:
+//   - stdio already redirected (pipes from an MCP client, `> file`): kept,
+//     not detached;
+//   - started from cmd/PowerShell/Windows Terminal: attach to that console
+//     and point stdout/stderr at it, not detached;
+//   - otherwise (Explorer, a restart without console): detached.
+//
+// Console-subsystem builds (plain `go build`) are detached when the console
+// was created just for this process; it is released so its window closes.
+func Prepare() bool {
+	if h, _, _ := pGetConsoleWindow.Call(); h != 0 {
+		var pids [4]uint32
+		n, _, _ := pGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)))
+		if n == 1 {
+			pFreeConsole.Call()
+			return true
+		}
+		return false
+	}
+	if validHandle(os.Stdout) || validHandle(os.Stderr) {
+		return false
+	}
+	if r, _, _ := pAttachConsole.Call(^uintptr(0)); r == 0 { // ATTACH_PARENT_PROCESS
 		return true
 	}
-	var pids [4]uint32
-	n, _, _ := pGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&pids[0])), uintptr(len(pids)))
-	return n == 1
+	// os.NewFile (unlike os.OpenFile) detects console handles, so output is
+	// written as Unicode (WriteConsoleW) and Chinese text is not garbled.
+	reopen := func(f **os.File, name string, std uint32) {
+		if validHandle(*f) {
+			return
+		}
+		p, _ := windows.UTF16PtrFromString(name)
+		h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+		if err != nil {
+			return
+		}
+		*f = os.NewFile(uintptr(h), name)
+		windows.SetStdHandle(std, h)
+	}
+	reopen(&os.Stdout, "CONOUT$", windows.STD_OUTPUT_HANDLE)
+	reopen(&os.Stderr, "CONOUT$", windows.STD_ERROR_HANDLE)
+	reopen(&os.Stdin, "CONIN$", windows.STD_INPUT_HANDLE)
+	// The shell has already printed its prompt (it does not wait for GUI
+	// programs); start on a fresh line.
+	os.Stderr.WriteString("\r\n")
+	return false
 }
 
-// HideConsole detaches from the console so its window goes away. Writes to
-// stdout/stderr fail silently afterwards.
-func HideConsole() { pFreeConsole.Call() }
+func validHandle(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	h := windows.Handle(f.Fd())
+	if h == 0 || h == windows.InvalidHandle {
+		return false
+	}
+	t, err := windows.GetFileType(h)
+	return err == nil && t != windows.FILE_TYPE_UNKNOWN
+}
 
 // MessageBox shows a modal message (used for errors when there is no console).
 func MessageBox(title, text string, isError bool) {
@@ -230,10 +285,15 @@ func windowLoop() {
 	}
 	handle := uintptr(wv.Window())
 	setIcons(handle)
+	setTitleBar(handle, systemDark(), nil) // before the page reports its theme
 	restorePlacement(handle)
 	origProc, _, _ = pSetWindowLongPtrW.Call(handle, gwlpWndProc, windows.NewCallback(wndProc))
 	wv.Bind("__openExternal", func(u string) { OpenBrowser(u) })
+	wv.Bind("__setTheme", func(dark bool, r, g, b int) {
+		setTitleBar(handle, dark, &[3]int{r, g, b})
+	})
 	wv.Init(openExternalJS)
+	wv.Init(themeJS)
 	wv.Navigate(opts.URL)
 	hwnd.Store(handle)
 	if quitting.Load() { // Quit raced with window creation
@@ -398,4 +458,66 @@ func restorePlacement(h uintptr) {
 	q.Length = uint32(unsafe.Sizeof(q))
 	q.Flags = 0
 	pSetWindowPlacement.Call(h, uintptr(unsafe.Pointer(&q)))
+}
+
+// ---- title bar theme -------------------------------------------------------
+
+const (
+	dwmaDarkModeOld  = 19 // Windows 10 before 20H1
+	dwmaDarkMode     = 20
+	dwmaBorderColor  = 34 // Windows 11
+	dwmaCaptionColor = 35
+	dwmaTextColor    = 36
+)
+
+var lastTitleBar atomic.Value // string key of the last applied theme
+
+// setTitleBar makes the window frame follow the page theme: dark or light
+// title bar (Windows 10 1809+), and on Windows 11 the exact page background
+// as caption color. bg is nil to use the system default caption color.
+func setTitleBar(h uintptr, dark bool, bg *[3]int) {
+	key := fmt.Sprint(dark, bg)
+	if bg != nil {
+		key = fmt.Sprint(dark, *bg)
+	}
+	if lastTitleBar.Load() == key {
+		return
+	}
+	lastTitleBar.Store(key)
+
+	set := func(attr uintptr, v uint32) bool {
+		r, _, _ := pDwmSetWindowAttribute.Call(h, attr, uintptr(unsafe.Pointer(&v)), 4)
+		return r == 0
+	}
+	var d uint32
+	if dark {
+		d = 1
+	}
+	if !set(dwmaDarkMode, d) {
+		set(dwmaDarkModeOld, d)
+	}
+	if bg != nil {
+		c := uint32(bg[0]&0xff) | uint32(bg[1]&0xff)<<8 | uint32(bg[2]&0xff)<<16 // COLORREF 0x00BBGGRR
+		set(dwmaCaptionColor, c)
+		set(dwmaBorderColor, c)
+		text := uint32(0x00202020)
+		if dark {
+			text = 0x00E8E8E8
+		}
+		set(dwmaTextColor, text)
+	}
+	// Windows 10 only repaints the frame on a frame change.
+	const swpFlags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020 // NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED
+	pSetWindowPos.Call(h, 0, 0, 0, 0, 0, swpFlags)
+}
+
+// systemDark reports whether Windows apps use the dark theme.
+func systemDark() bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer k.Close()
+	v, _, err := k.GetIntegerValue("AppsUseLightTheme")
+	return err == nil && v == 0
 }

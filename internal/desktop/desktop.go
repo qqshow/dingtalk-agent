@@ -34,3 +34,24 @@ const openExternalJS = `(function(){
     return orig.apply(window, arguments);
   };
 })();`
+
+// themeJS reports the page theme (and background color) to the window so
+// the title bar can match it; it runs again whenever the theme changes.
+const themeJS = `(function(){
+  var mq = matchMedia('(prefers-color-scheme: dark)');
+  function sync(){
+    if (!window.__setTheme || !document.body) return;
+    var t = document.documentElement.getAttribute('data-theme');
+    var dark = t ? t === 'dark' : mq.matches;
+    var m = (getComputedStyle(document.body).backgroundColor || '').match(/\d+/g) || [];
+    if (m.length < 3) return;
+    window.__setTheme(dark, +m[0], +m[1], +m[2]);
+  }
+  function later(){ sync(); setTimeout(sync, 350); }
+  function start(){
+    later();
+    new MutationObserver(later).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
+    if (mq.addEventListener) mq.addEventListener('change', later);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();`
