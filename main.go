@@ -26,6 +26,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/chat"
 	"github.com/qqshow/dingtalk-agent/internal/config"
 	"github.com/qqshow/dingtalk-agent/internal/decrypt"
+	"github.com/qqshow/dingtalk-agent/internal/desktop"
 	"github.com/qqshow/dingtalk-agent/internal/mcp"
 	"github.com/qqshow/dingtalk-agent/internal/update"
 	"github.com/qqshow/dingtalk-agent/internal/web"
@@ -35,10 +36,17 @@ import (
 // builds report "dev" and are never prompted to update.
 var version = "dev"
 
+// guiMode: started by double-clicking (Windows) — the web UI is shown in a
+// native window with a tray icon and there is no console for messages.
+var guiMode bool
+
+const appTitle = "钉钉助手"
+
 const usage = `dingtalk-agent %s — 钉钉聊天记录（V2/V3）解密 / 浏览 / Agent 接口
 
 用法:
   dingtalk-agent [serve] [flags]     启动网页 + REST API + MCP(HTTP /mcp)，默认命令
+                                     （Windows 双击启动时以窗口 + 托盘图标运行）
   dingtalk-agent mcp [flags]         以 stdio 方式运行 MCP server（给 Claude Code / Desktop 用）
   dingtalk-agent sync [flags]        立即解密一次最新数据
   dingtalk-agent report [-date D]    输出某天的结构化统计（JSON）
@@ -70,6 +78,7 @@ func main() {
 	to := fs.String("to", "", "区间结束日期（report/digest）")
 	scope := fs.String("scope", "all", "digest 范围: all | involved")
 	verbose := fs.Bool("v", false, "输出调试日志")
+	noWindow := fs.Bool("no-window", false, "双击启动时也不打开窗口和托盘图标（Windows）")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), usage, version)
 		fs.PrintDefaults()
@@ -101,6 +110,11 @@ func main() {
 		return
 	}
 
+	if cmd == "serve" && !*noWindow && os.Getenv("DINGTALK_AGENT_NO_WINDOW") == "" && desktop.Detached() {
+		guiMode = true
+		desktop.HideConsole()
+	}
+
 	cfg, err := config.Load(o)
 	if err != nil {
 		fatal(err)
@@ -121,7 +135,7 @@ func main() {
 
 	switch cmd {
 	case "serve":
-		serve(ctx, a)
+		serve(ctx, stop, a)
 	case "mcp":
 		runMCP(ctx, a)
 	case "sync":
@@ -155,6 +169,9 @@ func setupLogging(cfg *config.Config, level slog.Level, cmd string) {
 	if f, err := os.OpenFile(filepath.Join(logDir, "dingtalk-agent.log"),
 		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		w = io.MultiWriter(os.Stderr, f)
+		if guiMode {
+			w = f // no console: writes to stderr would fail and stop MultiWriter
+		}
 	}
 	if cmd == "report" || cmd == "digest" || cmd == "sync" {
 		if level == slog.LevelInfo {
@@ -164,7 +181,7 @@ func setupLogging(cfg *config.Config, level slog.Level, cmd string) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})).With("cmd", cmd))
 }
 
-func serve(ctx context.Context, a *app.App) {
+func serve(ctx context.Context, stop context.CancelFunc, a *app.App) {
 	cfg := a.Cfg
 	m := mcp.New(a)
 	runner := ai.New(a)
@@ -176,7 +193,7 @@ func serve(ctx context.Context, a *app.App) {
 		default:
 		}
 	}
-	handler := web.New(a, m, runner, upd, chat.New(a, m.Tools()), restart)
+	handler := withDesktop(web.New(a, m, runner, upd, chat.New(a, m.Tools()), restart))
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
@@ -187,6 +204,9 @@ func serve(ctx context.Context, a *app.App) {
 
 	ln, err := listen(addr)
 	if err != nil {
+		if guiMode && showRunningInstance(cfg.Port) {
+			os.Exit(0) // already running: its window was brought to the front
+		}
 		fatal(fmt.Errorf("listen %s: %w (is another instance running?)", addr, err))
 	}
 	host := cfg.Host
@@ -205,23 +225,82 @@ func serve(ctx context.Context, a *app.App) {
 		defer cancel()
 		srv.Shutdown(sctx)
 	}
-	select {
-	case <-ctx.Done():
-		shutdown()
-	case err := <-errc:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fatal(err)
+	wait := func() {
+		select {
+		case <-ctx.Done():
+			shutdown()
+		case err := <-errc:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fatal(err)
+			}
+		case <-restartCh:
+			// An update was installed: release the port and start the new version.
+			shutdown()
+			a.Close()
+			desktop.Quit() // remove the tray icon before the new process adds its own
+			fmt.Fprintln(os.Stderr, "\n  已升级到新版本，正在重启…")
+			if err := update.Restart(); err != nil {
+				fatal(fmt.Errorf("新版本已安装，但自动重启失败: %w。请手动重新启动程序", err))
+			}
+			os.Exit(0) // Windows: the new process has been started
 		}
-	case <-restartCh:
-		// An update was installed: release the port and start the new version.
-		shutdown()
-		a.Close()
-		fmt.Fprintln(os.Stderr, "\n  已升级到新版本，正在重启…")
-		if err := update.Restart(); err != nil {
-			fatal(fmt.Errorf("新版本已安装，但自动重启失败: %w。请手动重新启动程序", err))
-		}
-		os.Exit(0) // Windows: the new process has been started
 	}
+	if !guiMode {
+		wait()
+		return
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); wait(); desktop.Quit() }()
+	desktop.Run(desktop.Options{
+		URL:      "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.Port)) + "/",
+		Title:    appTitle,
+		StateDir: cfg.DataDir,
+		OnQuit:   stop,
+	})
+	stop() // window and tray are gone: stop the server too
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+	}
+}
+
+// withDesktop adds POST /api/desktop/show, which a second instance started by
+// double-clicking uses to bring this instance's window to the front.
+func withDesktop(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/desktop/show" && r.Method == http.MethodPost {
+			if !guiMode {
+				http.Error(w, "not running as a desktop app", http.StatusConflict)
+				return
+			}
+			desktop.Show()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// showRunningInstance asks an instance already listening on port to show its
+// window (or, if it runs in a terminal, opens its page in the browser). It
+// reports whether that worked.
+func showRunningInstance(port int) bool {
+	base := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) + "/"
+	desktop.AllowForeground()
+	c := &http.Client{Timeout: 3 * time.Second}
+	resp, err := c.Post(base+"api/desktop/show", "text/plain", nil)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return true
+	case http.StatusConflict:
+		desktop.OpenBrowser(base)
+		return true
+	}
+	return false
 }
 
 // listen binds addr. A process started by an update retries for a while,
@@ -260,6 +339,11 @@ func printJSON(v any) {
 }
 
 func fatal(err error) {
+	if guiMode {
+		slog.Error("fatal", "err", err)
+		desktop.MessageBox(appTitle+" - 无法启动", err.Error(), true)
+		os.Exit(1)
+	}
 	fmt.Fprintln(os.Stderr, "错误:", err)
 	os.Exit(1)
 }

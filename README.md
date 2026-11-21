@@ -24,6 +24,7 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 | 搜索 | 全量关键字搜索，可限定会话和时间范围 |
 | 导出 | 按会话导出 JSON（含图片和文件附件），便于交给 AI 分析 |
 | 设置 | AI 助手（模型接口、自动生成时间）、自动同步频率、Agent 接入信息、检查更新 |
+| 桌面窗口 | Windows 上双击即以独立窗口打开（无需浏览器），关闭窗口后缩到托盘继续运行 |
 | 自动升级 | 发现 GitHub 上的新版本时提示，确认后自动下载、校验、替换并重启 |
 | Agent 接口 | REST API 和 MCP（HTTP / stdio），提供 12 个工具和 2 个提示词模板 |
 
@@ -77,13 +78,18 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 ### Windows
 
-1. 解压 zip，进入解压出的目录后运行：
+解压 zip，**双击 `dingtalk-agent.exe`** 即可。程序以独立窗口打开（使用系统自带的 WebView2，不需要浏览器），
+任务栏右下角的托盘里会出现程序图标：
 
-   ```powershell
-   .\dingtalk-agent.exe
-   ```
+- **关闭窗口**：程序缩到托盘继续运行，定时同步和 AI 日报 / 周报照常进行
+- **单击托盘图标**：重新打开窗口；右键菜单可以「在浏览器中打开」或「退出」
+- **再次双击 exe**：不会重复启动，而是把已有的窗口切到前台
+- 窗口大小和位置会被记住
 
-2. 打开 <http://localhost:8090>
+从命令行（cmd / PowerShell / Windows Terminal）运行 `.\dingtalk-agent.exe` 时，则和以前一样在终端里运行，不打开窗口，
+用浏览器访问 <http://localhost:8090>。双击时也不想打开窗口，可以加 `-no-window` 参数（例如写在快捷方式里）。
+
+电脑上没有 WebView2 时（Win11 和已更新 Edge 的 Win10 都自带），程序会自动改用默认浏览器打开页面。
 
 ### macOS
 
@@ -138,6 +144,7 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 | `-host` | `127.0.0.1` | 监听地址。设为 `0.0.0.0` 会把聊天记录暴露到局域网，请谨慎 |
 | `-sync-interval` | `30` | 自动同步间隔（分钟，`0` 表示关闭）。指定后会覆盖网页上的设置 |
 | `-uid` | 自动识别 | 钉钉数字 UID |
+| `-no-window` | | Windows 上双击启动时也不打开窗口和托盘图标 |
 | `-dingtalk-dir` | 自动查找 | 账号目录，以 `<hash>_v3` 或 `<uid>_v2` 结尾 |
 | `-data` | `<程序目录>/data` | 本地数据目录 |
 
@@ -305,6 +312,13 @@ GET    /api/ai/status                        内置 AI 的运行进度、上次�
 **会修改钉钉的数据吗？**
 不会。程序只读取钉钉的数据库文件，解密后的副本保存在 `data/decrypted/`，Agent 写回的内容保存在独立的 `data/agent.db`。
 
+**窗口关掉了，程序还在运行吗？**
+在。关闭窗口只是缩到托盘，定时同步和 AI 日报 / 周报会继续。要完全退出，右键托盘图标选「退出」。
+Windows 11 默认会把新的托盘图标收起来，点任务栏右下角的 `^` 可以找到，也可以把它拖到任务栏上常驻。
+
+**想开机自动启动？**
+按 `Win + R` 输入 `shell:startup` 打开启动文件夹，把 `dingtalk-agent.exe` 的快捷方式放进去即可。
+
 **怎么升级？**
 程序启动时和每隔 12 小时会检查 GitHub 上的新版本。有新版本时，网页右下角会提示，点"立即升级"后自动完成：
 下载对应系统的安装包，用发布页的 `SHA256SUMS.txt` 校验，确认新程序可以正常运行后替换旧程序，再自动重启，页面随后自动刷新。
@@ -317,6 +331,8 @@ GET    /api/ai/status                        内置 AI 的运行进度、上次�
 ```
 data/
   config.json        账号、端口、同步频率、AI 助手、是否自动检查更新（自动生成）
+  window.json        窗口大小和位置（Windows 窗口模式）
+  webview/           窗口内嵌浏览器（WebView2）的缓存
   decrypted/         解密后的快照（每次同步生成新文件，旧文件自动清理）
   agent.db           日报、周报和待办，建议备份
   ai_state.json      AI 助手的自动运行记录
@@ -346,6 +362,12 @@ go build -ldflags "-s -w" -o dingtalk-agent.exe .   # Linux/macOS 下可去掉 .
 go test ./...
 ```
 
+Windows 程序的图标和版本信息来自根目录的 `rsrc_windows_*.syso`（`go build` 会自动带上）。更换图标 `internal/desktop/icon.ico` 后重新生成：
+
+```bash
+go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --out rsrc --icon internal/desktop/icon.ico --manifest gui
+```
+
 推送到 `main` 或提交 PR 时，GitHub Actions 会运行测试并构建 Windows 和 macOS 程序；推送 `v*` 标签会自动发布 Release。
 
 项目结构：
@@ -362,6 +384,7 @@ internal/
   chat/     AI 对话（@ 人或群、调用数据工具）
   syncer/   定时同步与状态
   update/   检查新版本与自动升级
+  desktop/  Windows 桌面窗口（WebView2）和托盘图标
   export/   JSON 导出与 zip 打包
   web/      HTTP 服务、REST API、内嵌前端（static/，原生 JS，无构建步骤）
   mcp/      MCP server（工具与提示词，支持 stdio / HTTP）
