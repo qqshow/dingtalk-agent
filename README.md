@@ -8,7 +8,7 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 - **单文件，零依赖**：一个可执行文件，网页已内嵌；纯 Go 实现（含 SQLite），不需要 Python、CGO 或第三方解密工具
 - **原生解密，支持 V2 / V3**：AES-ECB，正确处理 WAL；聊天记录和日历一次完整解密约 2 秒
-- **内置 AI 助手**：接入 DeepSeek、通义千问、Kimi、智谱、OpenAI 或本机 Ollama 等兼容 OpenAI 接口的模型，每天自动生成日报、周报，提取待办、跟踪进展、安排第二天的工作
+- **内置 AI 助手**：接入 DeepSeek、通义千问、Kimi、智谱、OpenAI 或本机 Ollama 等兼容 OpenAI 接口的模型，每天自动生成日报、周报，提取待办、跟踪进展、安排第二天的工作；也可以直接和 AI 对话，@ 某人或某群来分析、讨论和处理工作
 - **为 Agent 设计**：结构化日报统计、按重要程度排序的消息摘要、日程，以及可写回的总结和待办
 - **数据只在本机**：只读访问钉钉数据；默认只监听 `127.0.0.1`，并拦截跨站和 DNS rebinding 访问；对外的网络请求只有两种：检查 GitHub 上的新版本（可关闭），以及你启用内置 AI 助手后访问你配置的模型接口
 
@@ -17,6 +17,7 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 | 模块 | 说明 |
 |---|---|
 | 消息 | 浏览全部单聊、群聊和项目群，支持图片（优先显示原图，可缩放）、文件、引用、富文本和 @ 高亮 |
+| AI 对话 | 和 AI 讨论你的工作：可以 @ 某人或某群，AI 会结合他们的聊天记录回答，也能自己查找消息、日程和待办，帮你分析、起草回复、记下待办 |
 | 工作台 | 每日统计（消息量、互动的人、参与的群和项目、会议、待我回复）、AI 日报和周报（可一键生成）、日程时间线、@我的消息 |
 | 待办 | AI 提取或手动添加的待办（todo）与待跟踪（follow_up）事项，支持优先级、截止日期，可跳回来源会话；AI 判断已完成的事项会提示你确认 |
 | 日程 | 钉钉日历月视图：会议、会议室、组织者、审批待办、AI 听记、请假 |
@@ -175,8 +176,21 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 
 如果程序在设定时间没有运行，当天稍后启动时会补上。如果当天已有其他 Agent（如 Claude Code）写入的日报，自动任务不会覆盖它。
 
+**AI 对话**（左侧栏"AI 对话"）
+
+- 直接提问，例如"总结今天的工作""最近一周我答应过别人、但还没完成的事情有哪些？""结合明天的日程帮我安排工作"
+- 输入 `@` 选择某人或某群：选择人时，会附上你和他的单聊记录以及他在群里的发言；选择群时，会附上群里的聊天记录。时间范围可选今天、近 3 天、近 7 天或近 30 天
+- AI 会按需查阅数据：按名称查找会话、读取某个会话的消息、搜索关键字、查看统计、日程和待办，每一步都会显示在回答上方
+- 可以让 AI 起草回复（复制后自己在钉钉里发送），或让它把讨论出的事项记成待办
+- 在消息页面打开某个会话，点右上角"问 AI"，会直接 @ 这个人或群开始对话
+- 对话记录保存在本地 `data/agent.db`，可以随时回看或删除
+
+查阅数据依赖模型的工具调用（function calling）能力。DeepSeek、通义千问、Kimi、智谱、OpenAI 的主流模型都支持；
+如果模型不支持，AI 会只根据你 @ 的人或群的聊天记录回答，并在回答中提示。
+
 **隐私**：生成日报时，只把与你相关的聊天发给模型服务商：单聊、你发过言或被 @ 的群、项目群；其他群只发送统计数字，机器人消息不发送。
-周报只使用已生成的日报和事项。想让数据完全不离开电脑，请使用本机的 Ollama。
+周报只使用已生成的日报和事项。AI 对话中，你 @ 的人或群的聊天记录，以及 AI 为回答问题查阅的内容，会发送给模型服务商。
+想让数据完全不离开电脑，请使用本机的 Ollama。
 
 API Key 保存在 `data/config.json` 中，也可以用环境变量 `DINGTALK_AI_API_KEY` 提供，这种方式不会写入文件。
 发送给模型的聊天摘要默认最多 30000 字，可以在 `config.json` 的 `ai.max_input_chars` 中调整。
@@ -251,6 +265,8 @@ DELETE /api/agent/todos/{id}
 GET    /api/settings
 PUT    /api/settings                         {"sync_interval_minutes":10}
 POST   /api/ai/run                           {"kind":"daily|weekly","date":"today"}  由内置 AI 生成日报 / 周报
+POST   /api/chat/send                        {"session_id":0,"text":"...","mentions":["<cid>"],"days":7}  AI 对话（SSE 流式返回）
+GET    /api/chat/sessions                    AI 对话列表；GET/PATCH/DELETE /api/chat/sessions/{id}
 GET    /api/ai/status                        内置 AI 的运行进度、上次结果和下次自动运行时间
 ```
 
@@ -337,7 +353,8 @@ internal/
   store/    快照管理、消息解析、查询、日程
   analysis/ 日报统计、消息摘要、日程汇总
   agentdb/  Agent 写回的日报和待办
-  ai/       内置 AI 助手（OpenAI 兼容接口、日报 / 周报生成、定时任务）
+  ai/       内置 AI 助手（OpenAI 兼容接口、工具调用、日报 / 周报生成、定时任务）
+  chat/     AI 对话（@ 人或群、调用数据工具）
   syncer/   定时同步与状态
   update/   检查新版本与自动升级
   export/   JSON 导出与 zip 打包

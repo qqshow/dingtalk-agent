@@ -20,6 +20,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/ai"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/app"
+	"github.com/qqshow/dingtalk-agent/internal/chat"
 	"github.com/qqshow/dingtalk-agent/internal/config"
 	"github.com/qqshow/dingtalk-agent/internal/export"
 	"github.com/qqshow/dingtalk-agent/internal/store"
@@ -34,13 +35,14 @@ type Server struct {
 	a       *app.App
 	ai      *ai.Runner
 	upd     *update.Updater
+	chat    *chat.Service
 	restart func() // restarts the process after an update is installed
 	mux     *http.ServeMux
 }
 
 // New builds the HTTP handler. mcp is mounted at /mcp when non-nil.
-func New(a *app.App, mcp http.Handler, runner *ai.Runner, upd *update.Updater, restart func()) http.Handler {
-	s := &Server{a: a, ai: runner, upd: upd, restart: restart, mux: http.NewServeMux()}
+func New(a *app.App, mcp http.Handler, runner *ai.Runner, upd *update.Updater, cs *chat.Service, restart func()) http.Handler {
+	s := &Server{a: a, ai: runner, upd: upd, chat: cs, restart: restart, mux: http.NewServeMux()}
 	s.routes(mcp)
 	return s.guard(s.logging(s.mux))
 }
@@ -78,6 +80,11 @@ func (s *Server) routes(mcp http.Handler) {
 	m.HandleFunc("GET /api/local-file", s.apiLocalFile)
 
 	// Agent API.
+	m.HandleFunc("GET /api/chat/sessions", s.apiChatSessions)
+	m.HandleFunc("GET /api/chat/sessions/{id}", s.apiChatSession)
+	m.HandleFunc("PATCH /api/chat/sessions/{id}", s.apiChatRename)
+	m.HandleFunc("DELETE /api/chat/sessions/{id}", s.apiChatDelete)
+	m.HandleFunc("POST /api/chat/send", s.apiChatSend)
 	m.HandleFunc("GET /api/update/status", s.apiUpdateStatus)
 	m.HandleFunc("POST /api/update/check", s.apiUpdateCheck)
 	m.HandleFunc("POST /api/update/apply", s.apiUpdateApply)

@@ -34,6 +34,9 @@ const ICONS = {
   file: '<path d="M7 3.5h7l4.5 4.5v12.5H7Z"/><path d="M14 3.5V8h4.5"/>',
   card: '<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9.5h17"/>',
   approval: '<path d="M8 4.5h8M9 3.5h6v3H9z"/><rect x="5" y="5" width="14" height="15.5" rx="2.5"/><path d="m9 13 2 2 4-4"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
+  close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
 };
 const icon = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
 
@@ -115,18 +118,48 @@ function avatar(name, { size = '', group = false, project = false, bot = false, 
 
 // Safe markdown subset for AI summaries.
 function md(src) {
-  const inline = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  const out = []; let list = null;
-  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
-  for (const raw of String(src || '').split('\n')) {
-    const line = raw.trimEnd(); let m;
-    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { close(); out.push(`<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`); }
-    else if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(m[1])}</li>`); }
-    else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[1])}</li>`); }
-    else if (!line.trim()) close();
-    else { close(); out.push(`<p>${inline(line)}</p>`); }
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const out = []; let list = null, code = null, table = null, quote = false;
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const closeTable = () => { if (table) { out.push('</tbody></table></div>'); table = null; } };
+  const closeQuote = () => { if (quote) { out.push('</blockquote>'); quote = false; } };
+  const closeAll = () => { closeList(); closeTable(); closeQuote(); };
+  const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+  const lines = String(src || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd(); let m;
+    if (code !== null) {
+      if (/^\s*```/.test(line)) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = null; }
+      else code.push(lines[i]);
+      continue;
+    }
+    if (/^\s*```/.test(line)) { closeAll(); code = []; continue; }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      if (!table) {
+        const next = lines[i + 1] || '';
+        if (/^\s*\|?\s*:?-{2,}/.test(next)) {
+          closeList(); closeQuote();
+          out.push(`<div class="md-table"><table><thead><tr>${cells(line).map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>`);
+          table = true; i++; continue;
+        }
+      } else { out.push(`<tr>${cells(line).map(c => `<td>${inline(c)}</td>`).join('')}</tr>`); continue; }
+    }
+    closeTable();
+    if ((m = line.match(/^>\s?(.*)$/))) { closeList(); if (!quote) { out.push('<blockquote>'); quote = true; } out.push(`<p>${inline(m[1])}</p>`); continue; }
+    closeQuote();
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { closeList(); out.push('<hr>'); }
+    else if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { closeList(); out.push(`<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`); }
+    else if ((m = line.match(/^\s*[-*]\s+(.*)$/))) { if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(m[1])}</li>`); }
+    else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[1])}</li>`); }
+    else if (!line.trim()) closeList();
+    else { closeList(); out.push(`<p>${inline(line)}</p>`); }
   }
-  close();
+  if (code !== null) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+  closeAll();
   return out.join('');
 }
 
@@ -170,7 +203,7 @@ function setQuery(params) {
   history.replaceState(null, '', `#/${r.name}${r.arg ? '/' + encodeURIComponent(r.arg) : ''}${q ? '?' + q : ''}`);
 }
 
-const VIEWS = { chat: viewChat, report: viewReport, todos: viewTodos, calendar: viewCalendar, search: viewSearch, exports: viewExports, settings: viewSettings };
+const VIEWS = { chat: viewChat, ai: viewAI, report: viewReport, todos: viewTodos, calendar: viewCalendar, search: viewSearch, exports: viewExports, settings: viewSettings };
 let renderSeq = 0;
 async function render() {
   const r = parseRoute();
@@ -266,10 +299,12 @@ async function openChat(cid) {
       <button class="btn btn-ghost btn-icon mobile-back" onclick="go('#/chat')" title="返回">${icon('chevL')}</button>
       ${convAvatar(c, 'sm')}
       <div class="grow"><h2>${esc(c ? c.title : cid)}</h2><div class="meta" id="chatMeta">${esc(meta)}</div></div>
+      <button class="btn btn-ghost btn-sm" id="chatAskAI" title="基于这个${c && c.type === 'group' ? '群' : '人'}的聊天记录和 AI 对话">${icon('spark')}问 AI</button>
       <button class="btn btn-ghost btn-sm" id="chatSearchBtn">${icon('search')}在会话中搜索</button>
     </header>
     <div class="chat-body" id="chatBody"><div class="empty">加载中…</div></div>`;
   $('#chatSearchBtn').onclick = () => go(`#/search?cid=${encodeURIComponent(cid)}`);
+  $('#chatAskAI').onclick = () => go(`#/ai?mention=${encodeURIComponent(cid)}`);
   $('#chatBody').addEventListener('click', e => {
     const img = e.target.closest('img.msg-img, img.inline-img');
     if (img) openViewer(img);
@@ -739,6 +774,287 @@ function renderAIProgress(date) {
   const d = date || (parseRoute().params.get('date') || ymd(new Date()));
   box.innerHTML = l && !l.ok && (l.date_key === d || l.date_key.includes('~'))
     ? `<div class="ai-progress error">${esc((l.kind === 'weekly' ? '周报' : '日报') + '生成失败：' + l.error)}<span class="muted">${esc(l.finished_at.slice(5, 16))}</span></div>` : '';
+}
+
+// ================================================================ AI CHAT
+const AC = { session: 0, sessions: [], mentions: new Map(), streaming: null, pop: { items: [], idx: 0 } };
+const AI_SUGGESTIONS = [
+  ['总结今天的工作', '帮我总结一下今天的工作：做了什么、有哪些进展、还有什么没处理完'],
+  ['答应别人的事', '最近一周我答应过别人、但还没完成的事情有哪些？'],
+  ['需要回复的消息', '有哪些消息在等我回复？按紧急程度排序，并帮我起草回复'],
+  ['明天的安排', '结合明天的日程和未完成的待办，帮我安排一下明天的工作'],
+];
+
+async function viewAI(r, alive) {
+  AC.session = +(r.arg || 0);
+  const ready = await loadAIStatus();
+  await loadConvs();
+  if (!alive()) return;
+  $('#view').innerHTML = `<div class="ai-page">
+    <aside class="ai-side">
+      <button class="btn btn-primary ai-new" id="aiNew">${icon('plus')}新对话</button>
+      <div class="ai-sessions" id="aiSessions"></div>
+    </aside>
+    <section class="ai-main">
+      <div class="ai-msgs" id="aiMsgs"></div>
+      <div class="ai-composer">
+        <div class="ai-input-wrap">
+          <textarea id="aiInput" rows="1" placeholder="问问 AI，可以 @ 某人或某群，例如：@项目群 这周有什么风险？"></textarea>
+          <div class="mention-pop" id="mentionPop" hidden></div>
+        </div>
+        <div class="ai-bar">
+          <select class="input" id="aiDays" title="@ 的人或群附带多长时间的聊天记录">
+            <option value="1">今天</option><option value="3">近 3 天</option><option value="7" selected>近 7 天</option><option value="30">近 30 天</option>
+          </select>
+          <span class="muted ai-hint">@ 的人或群会附上这段时间的聊天记录 · Enter 发送，Shift+Enter 换行</span>
+          <div class="grow"></div>
+          <button class="btn btn-primary" id="aiSend">${icon('send')}发送</button>
+        </div>
+      </div>
+    </section></div>`;
+  try { const d = localStorage.getItem('ai-days'); if (d) $('#aiDays').value = d; } catch (_) {}
+  $('#aiDays').onchange = e => { try { localStorage.setItem('ai-days', e.target.value); } catch (_) {} };
+  $('#aiNew').onclick = () => { if (!AC.streaming) { AC.mentions.clear(); go('#/ai'); } };
+  bindComposer(ready);
+  await refreshSessions();
+  if (AC.session) await loadSession(AC.session);
+  else renderAIEmpty(ready);
+  const mention = r.params.get('mention');
+  if (mention) { const c = convOf(mention); if (c) insertMention(c, true); history.replaceState(null, '', '#/ai'); }
+  $('#aiInput').focus();
+}
+
+function renderAIEmpty(st) {
+  const box = $('#aiMsgs');
+  if (!st || !st.ready) {
+    box.innerHTML = `<div class="ai-welcome"><div class="ai-logo">${icon('spark')}</div><h2>AI 对话</h2>
+      <p>基于你的钉钉聊天记录、日程和待办，和 AI 一起分析、讨论、处理工作。</p>
+      <p class="muted">需要先在 <a href="#/settings">设置 → AI 助手</a> 中接入模型（DeepSeek、通义千问、Kimi 等）。</p></div>`;
+    return;
+  }
+  box.innerHTML = `<div class="ai-welcome"><div class="ai-logo">${icon('spark')}</div><h2>有什么可以帮你？</h2>
+    <p class="muted">AI 可以查阅你的聊天记录、日程和待办。输入 <b>@</b> 选择某人或某群，会附上与他们的聊天记录。</p>
+    <div class="ai-suggest">${AI_SUGGESTIONS.map(([t, q]) => `<button class="ai-sg" data-q="${esc(q)}"><b>${esc(t)}</b><span>${esc(q)}</span></button>`).join('')}</div>
+    <p class="muted ai-privacy">🔒 你提问时，相关的聊天内容会发送给你配置的模型服务商。</p></div>`;
+  box.onclick = e => { const b = e.target.closest('.ai-sg'); if (b) { $('#aiInput').value = b.dataset.q; sendAI(); } };
+}
+
+async function refreshSessions() {
+  try { AC.sessions = (await api('/api/chat/sessions')).sessions; } catch (_) { AC.sessions = []; }
+  renderSessions();
+}
+function renderSessions() {
+  const box = $('#aiSessions'); if (!box) return;
+  box.innerHTML = AC.sessions.length ? AC.sessions.map(x => `
+    <div class="ai-sess ${x.id === AC.session ? 'active' : ''}" data-id="${x.id}">
+      <div class="ai-sess-title">${esc(x.title || '新对话')}</div>
+      <div class="ai-sess-time">${esc(x.updated_at.slice(5, 16))}</div>
+      <button class="btn btn-ghost btn-icon btn-sm ai-sess-del" data-del="${x.id}" title="删除">${icon('trash')}</button>
+    </div>`).join('') : '<div class="empty" style="padding:24px 8px">还没有对话</div>';
+  box.onclick = async e => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      e.stopPropagation();
+      if (!confirm('删除这个对话？')) return;
+      await api(`/api/chat/sessions/${del.dataset.del}`, { method: 'DELETE' });
+      if (+del.dataset.del === AC.session) go('#/ai'); else refreshSessions();
+      return;
+    }
+    const it = e.target.closest('.ai-sess');
+    if (it && !AC.streaming) go(`#/ai/${it.dataset.id}`);
+  };
+}
+
+async function loadSession(id) {
+  try {
+    const d = await api(`/api/chat/sessions/${id}`);
+    $('#aiMsgs').innerHTML = d.messages.map(m => m.role === 'user' ? userBubble(m) : aiBubble(m)).join('');
+    scrollAI(true);
+  } catch (e) { toast(e.message); go('#/ai'); }
+}
+
+function highlightMentions(text, mentions) {
+  let h = esc(text);
+  for (const m of (mentions || [])) {
+    const t = esc('@' + m.title);
+    h = h.split(t).join(`<span class="ai-at ${m.kind === 'group' ? 'grp' : ''}" data-cid="${esc(m.cid)}">${t}</span>`);
+  }
+  return h;
+}
+function userBubble(m) {
+  const meta = m.meta || {};
+  const ctx = meta.mentions && meta.mentions.length ? `<div class="ai-ctx">${icon('link')}已附上 ${meta.mentions.map(x => esc(x.title)).join('、')} ${meta.days === 1 ? '今天' : `近 ${meta.days || 7} 天`}的聊天记录</div>` : '';
+  return `<div class="ai-row user"><div class="ai-bubble">${highlightMentions(m.content, meta.mentions).replace(/\n/g, '<br>')}</div>${ctx}</div>`;
+}
+function toolLine(t, running) {
+  return `<div class="ai-tool ${t.error ? 'err' : ''}">${running ? '<span class="spinner"></span>' : icon(t.error ? 'close' : 'check')}
+    <span>${esc(t.title || t.name)}</span>${t.summary && !running ? `<span class="muted">· ${esc(t.error ? t.error : t.summary)}</span>` : ''}</div>`;
+}
+function aiBubble(m, streaming = false) {
+  const meta = m.meta || {};
+  const tools = (meta.tools || []).map(t => toolLine(t, false)).join('');
+  return `<div class="ai-row assistant" ${m.id ? `data-id="${m.id}"` : ''}>
+    <div class="ai-avatar">${icon('spark')}</div>
+    <div class="ai-answer">
+      ${tools ? `<div class="ai-tools">${tools}</div>` : '<div class="ai-tools"></div>'}
+      ${meta.note ? `<div class="ai-note">${esc(meta.note)}</div>` : ''}
+      <div class="ai-content md">${m.content ? md(m.content) : streaming ? '<span class="ai-typing"><i></i><i></i><i></i></span>' : ''}</div>
+      ${meta.error ? `<div class="ai-error">${esc(meta.error)}</div>` : ''}
+      ${!streaming && m.content ? `<div class="ai-actions"><button class="btn btn-ghost btn-sm" data-copy-md="1">${icon('copy')}复制</button>
+        ${meta.model ? `<span class="muted">${esc(meta.model)}</span>` : ''}</div>` : ''}
+    </div></div>`;
+}
+function scrollAI(force) {
+  const box = $('#aiMsgs'); if (!box) return;
+  if (force || box.scrollHeight - box.scrollTop - box.clientHeight < 160) box.scrollTop = box.scrollHeight;
+}
+
+// ---- composer and @mentions
+function bindComposer(st) {
+  const input = $('#aiInput'), pop = $('#mentionPop');
+  const autosize = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 220) + 'px'; };
+  input.addEventListener('input', () => { autosize(); updateMentionPop(); });
+  input.addEventListener('click', updateMentionPop);
+  input.addEventListener('keydown', e => {
+    if (!pop.hidden) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); AC.pop.idx = (AC.pop.idx + (e.key === 'ArrowDown' ? 1 : -1) + AC.pop.items.length) % AC.pop.items.length; renderMentionPop(); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertMention(AC.pop.items[AC.pop.idx]); return; }
+      if (e.key === 'Escape') { pop.hidden = true; return; }
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendAI(); }
+  });
+  pop.addEventListener('mousedown', e => { const it = e.target.closest('[data-i]'); if (it) { e.preventDefault(); insertMention(AC.pop.items[+it.dataset.i]); } });
+  $('#aiSend').onclick = () => AC.streaming ? stopAI() : sendAI();
+  if (!st || !st.ready) { input.disabled = true; $('#aiSend').disabled = true; input.placeholder = '请先在设置中接入 AI 模型'; }
+  $('#aiMsgs').addEventListener('click', e => {
+    const cp = e.target.closest('[data-copy-md]');
+    if (cp) {
+      const id = cp.closest('.ai-row').dataset.id;
+      api(`/api/chat/sessions/${AC.session}`).then(d => {
+        const m = d.messages.find(x => String(x.id) === id);
+        if (m) navigator.clipboard.writeText(m.content).then(() => toast('已复制'));
+      });
+    }
+    const at = e.target.closest('.ai-at');
+    if (at) go(`#/chat/${encodeURIComponent(at.dataset.cid)}`);
+  });
+}
+function mentionQuery() {
+  const input = $('#aiInput');
+  const before = input.value.slice(0, input.selectionStart);
+  const m = before.match(/@([^\s@]{0,24})$/);
+  return m ? { q: m[1], start: before.length - m[0].length } : null;
+}
+function updateMentionPop() {
+  const pop = $('#mentionPop'), mq = mentionQuery();
+  if (!mq) { pop.hidden = true; return; }
+  const q = mq.q.toLowerCase();
+  const list = S.convs.filter(c => !c.is_notification && !c.is_bot && c.title && (!q || c.title.toLowerCase().includes(q)));
+  list.sort((a, b) => (b.title.toLowerCase().startsWith(q) - a.title.toLowerCase().startsWith(q)) || (b.last_modify - a.last_modify));
+  AC.pop.items = list.slice(0, 8); AC.pop.idx = 0;
+  if (!AC.pop.items.length) { pop.hidden = true; return; }
+  renderMentionPop(); pop.hidden = false;
+}
+function renderMentionPop() {
+  $('#mentionPop').innerHTML = AC.pop.items.map((c, i) => `<div class="mp-item ${i === AC.pop.idx ? 'active' : ''}" data-i="${i}">
+    ${convAvatar(c, 'xs')}<span class="mp-title">${esc(c.title)}</span>
+    <span class="tag ${c.type === 'group' ? (c.is_project ? 'tag-purple' : 'tag-orange') : 'tag-blue'}">${c.type === 'group' ? (c.is_project ? '项目群' : '群') : '人'}</span></div>`).join('');
+}
+function insertMention(c, append = false) {
+  if (!c) return;
+  const input = $('#aiInput');
+  const token = '@' + c.title + ' ';
+  if (append) {
+    input.value = (input.value && !input.value.endsWith(' ') ? input.value + ' ' : input.value) + token;
+  } else {
+    const mq = mentionQuery(); if (!mq) return;
+    const pos = input.selectionStart;
+    input.value = input.value.slice(0, mq.start) + token + input.value.slice(pos);
+    const caret = mq.start + token.length;
+    input.setSelectionRange(caret, caret);
+  }
+  AC.mentions.set(c.title, c.cid);
+  $('#mentionPop').hidden = true;
+  input.focus();
+  input.dispatchEvent(new Event('input'));
+}
+
+// ---- sending and streaming
+async function sendAI() {
+  const input = $('#aiInput');
+  const text = input.value.trim();
+  if (!text || AC.streaming) return;
+  const mentions = [...AC.mentions].filter(([t]) => text.includes('@' + t)).map(([, cid]) => cid);
+  input.value = ''; input.style.height = 'auto';
+  const box = $('#aiMsgs');
+  if (box.querySelector('.ai-welcome')) box.innerHTML = '';
+  box.insertAdjacentHTML('beforeend', `<div class="ai-row user pending"><div class="ai-bubble">${esc(text).replace(/\n/g, '<br>')}</div></div>`);
+  box.insertAdjacentHTML('beforeend', aiBubble({ content: '', meta: {} }, true).replace('class="ai-row assistant"', 'class="ai-row assistant live"'));
+  scrollAI(true);
+  const ctrl = new AbortController();
+  AC.streaming = ctrl;
+  setSendState(true);
+  const live = () => $('#aiMsgs .ai-row.live');
+  let text_ = '', raf = 0;
+  const paint = () => { raf = 0; const el = live(); if (el) { el.querySelector('.ai-content').innerHTML = md(text_) || '<span class="ai-typing"><i></i><i></i><i></i></span>'; scrollAI(); } };
+  const onEvent = ev => {
+    const el = live();
+    switch (ev.type) {
+      case 'session':
+        if (AC.session !== ev.session.id) { AC.session = ev.session.id; history.replaceState(null, '', `#/ai/${ev.session.id}`); }
+        refreshSessions(); break;
+      case 'user': {
+        const p = $('#aiMsgs .ai-row.user.pending');
+        if (p) p.outerHTML = userBubble(ev.message);
+        break;
+      }
+      case 'tool_start':
+        if (el) { text_ = ''; paint(); el.querySelector('.ai-tools').insertAdjacentHTML('beforeend', toolLine(ev.tool, true).replace('class="ai-tool', `data-ti="${ev.tool_index}" class="ai-tool`)); scrollAI(); }
+        break;
+      case 'tool_done':
+        if (el) { const t = el.querySelector(`[data-ti="${ev.tool_index}"]`); if (t) t.outerHTML = toolLine(ev.tool, false); }
+        break;
+      case 'delta': text_ += ev.text; if (!raf) raf = requestAnimationFrame(paint); break;
+      case 'note': if (el) el.querySelector('.ai-tools').insertAdjacentHTML('afterend', `<div class="ai-note">${esc(ev.text)}</div>`); break;
+      case 'done': if (el) el.outerHTML = aiBubble(ev.message); scrollAI(); updateTodoBadge(); break;
+      case 'error':
+        if (el) { el.classList.remove('live'); el.querySelector('.ai-content').innerHTML = md(text_); el.querySelector('.ai-answer').insertAdjacentHTML('beforeend', `<div class="ai-error">${esc(ev.error)}</div>`); }
+        break;
+    }
+  };
+  try {
+    const res = await fetch('/api/chat/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+      body: JSON.stringify({ session_id: AC.session, text, mentions, days: +$('#aiDays').value }) });
+    if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).detail || msg; } catch (_) {} throw new Error(msg); }
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of chunk.split('\n')) if (line.startsWith('data: ')) { try { onEvent(JSON.parse(line.slice(6))); } catch (_) {} }
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') onEvent({ type: 'error', error: e.message });
+  }
+  const el = live();
+  if (el) { // stopped or failed before "done": reload what the server saved
+    el.classList.remove('live');
+    if (AC.session) setTimeout(() => { if (!AC.streaming) loadSession(AC.session); }, 400);
+  }
+  AC.streaming = null;
+  setSendState(false);
+  refreshSessions();
+}
+function stopAI() { if (AC.streaming) AC.streaming.abort(); }
+function setSendState(busy) {
+  const b = $('#aiSend'); if (!b) return;
+  b.innerHTML = busy ? `${icon('stop')}停止` : `${icon('send')}发送`;
+  b.classList.toggle('btn-danger', busy);
 }
 
 // ================================================================== TODOS

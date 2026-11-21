@@ -209,6 +209,7 @@ type Conversation struct {
 	OtherUID       string `json:"other_uid,omitempty"`
 	IsProject      bool   `json:"is_project"`
 	IsNotification bool   `json:"is_notification"`
+	IsBot          bool   `json:"is_bot"` // single chat with a robot / service account
 	top            int64
 }
 
@@ -309,8 +310,11 @@ func (s *Snapshot) load() error {
 				}
 				c.OtherUID = other
 				if id, err := strconv.ParseInt(other, 10, 64); err == nil {
-					if u, ok := s.Users[id]; ok && u.Name() != "" {
-						c.Title = u.Name()
+					if u, ok := s.Users[id]; ok {
+						if u.Name() != "" {
+							c.Title = u.Name()
+						}
+						c.IsBot = u.IsBot()
 					}
 				}
 			}

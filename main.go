@@ -23,6 +23,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/ai"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/app"
+	"github.com/qqshow/dingtalk-agent/internal/chat"
 	"github.com/qqshow/dingtalk-agent/internal/config"
 	"github.com/qqshow/dingtalk-agent/internal/decrypt"
 	"github.com/qqshow/dingtalk-agent/internal/mcp"
@@ -175,7 +176,7 @@ func serve(ctx context.Context, a *app.App) {
 		default:
 		}
 	}
-	handler := web.New(a, m, runner, upd, restart)
+	handler := web.New(a, m, runner, upd, chat.New(a, m.Tools()), restart)
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 

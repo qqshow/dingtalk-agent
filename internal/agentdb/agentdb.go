@@ -62,7 +62,12 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate agent db: %w", err)
 	}
-	return &DB{db: db}, nil
+	d := &DB{db: db}
+	if err := d.initChat(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init chat tables: %w", err)
+	}
+	return d, nil
 }
 
 // migrate adds columns introduced after the first release.

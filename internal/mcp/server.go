@@ -54,6 +54,9 @@ func New(a *app.App) *Server {
 	return s
 }
 
+// Tools returns the tool definitions (also used by the built-in AI chat).
+func (s *Server) Tools() []Tool { return s.tools }
+
 // handle processes one message; nil response for notifications.
 func (s *Server) handle(ctx context.Context, req request) *response {
 	isNotification := len(req.ID) == 0 || string(req.ID) == "null"
