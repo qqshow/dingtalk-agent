@@ -403,4 +403,5 @@ internal/
 
 - V3 解密算法与 UID 识别方法移植自 [idealistichacker/dingtalk-chat-exporter](https://github.com/idealistichacker/dingtalk-chat-exporter)（MIT），详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - V2 密钥派生方式参考了 [p1g3/dingwave](https://github.com/p1g3/dingwave)
+- 感谢 [LINUX DO](https://linux.do) 社区的交流与支持
 - 本项目以 [MIT License](LICENSE) 发布
