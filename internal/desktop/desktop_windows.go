@@ -102,7 +102,10 @@ func Prepare() bool {
 		}
 		return false
 	}
-	if validHandle(os.Stdout) || validHandle(os.Stderr) {
+	// NUL handles are what a launcher passes when it has nothing to give
+	// (e.g. Go's os/exec, used by the update restart), so they don't mean
+	// "started from a shell with redirected output".
+	if (validHandle(os.Stdout) && !isNul(os.Stdout)) || (validHandle(os.Stderr) && !isNul(os.Stderr)) {
 		return false
 	}
 	if r, _, _ := pAttachConsole.Call(^uintptr(0)); r == 0 { // ATTACH_PARENT_PROCESS
@@ -142,6 +145,17 @@ func validHandle(f *os.File) bool {
 	}
 	t, err := windows.GetFileType(h)
 	return err == nil && t != windows.FILE_TYPE_UNKNOWN
+}
+
+// isNul reports whether f is the NUL device: a character device that is not
+// a console.
+func isNul(f *os.File) bool {
+	h := windows.Handle(f.Fd())
+	if t, err := windows.GetFileType(h); err != nil || t != windows.FILE_TYPE_CHAR {
+		return false
+	}
+	var mode uint32
+	return windows.GetConsoleMode(h, &mode) != nil
 }
 
 // MessageBox shows a modal message (used for errors when there is no console).
