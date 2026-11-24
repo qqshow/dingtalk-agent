@@ -42,6 +42,10 @@ and expose it to AI agents via REST and MCP for daily summaries and auto-generat
 
 ![工作台](docs/screenshots/dashboard.png)
 
+**AI 对话**：基于聊天记录、日程和待办提问，输入 @ 可附上某人或某群的聊天记录（深色主题）
+
+![AI 对话](docs/screenshots/ai-chat.png)
+
 <table>
   <tr>
     <td width="50%"><b>待办</b>：AI 提取的待办与待跟踪事项<br><img src="docs/screenshots/todos.png" alt="待办"></td>
