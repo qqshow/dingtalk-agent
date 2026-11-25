@@ -54,6 +54,7 @@ type Request struct {
 	Text      string   `json:"text"`
 	Mentions  []string `json:"mentions"` // conversation ids, or "u:<uid>" for a contact
 	Days      int      `json:"days"`     // time range for @mention context (default 7)
+	Images    []string `json:"images"`   // data URLs of attached images
 }
 
 // Service answers chat messages.
@@ -90,8 +91,15 @@ func (s *Service) Send(ctx context.Context, req Request, emit func(Event)) error
 		return ai.ErrNotReady
 	}
 	req.Text = strings.TrimSpace(req.Text)
-	if req.Text == "" {
+	imgs, err := parseImages(req.Images)
+	if err != nil {
+		return err
+	}
+	if req.Text == "" && len(imgs) == 0 {
 		return errors.New("请输入问题")
+	}
+	if req.Text == "" {
+		req.Text = "请看图片"
 	}
 	if req.Days <= 0 || req.Days > 93 {
 		req.Days = 7
@@ -116,17 +124,32 @@ func (s *Service) Send(ctx context.Context, req Request, emit func(Event)) error
 		return err
 	}
 	mentions, mctx := mentionContext(snap, req.Mentions, req.Days, time.Now())
-	userMsg, err := s.a.Agent.AddChatMessage(agentdb.ChatMessage{SessionID: sess.ID, Role: "user", Content: req.Text,
-		Context: mctx, Meta: agentdb.ChatMeta{Mentions: mentions, Days: req.Days}})
+	names, err := saveImages(s.a.Cfg.DataDir, sess.ID, imgs)
 	if err != nil {
 		return err
+	}
+	userMsg, err := s.a.Agent.AddChatMessage(agentdb.ChatMessage{SessionID: sess.ID, Role: "user", Content: req.Text,
+		Context: mctx, Meta: agentdb.ChatMeta{Mentions: mentions, Days: req.Days, Images: names}})
+	if err != nil {
+		removeImages(SessionImageDir(s.a.Cfg.DataDir, sess.ID), names)
+		return err
+	}
+	// Only the new message carries its images; earlier turns mention them
+	// in text so they are not sent (and paid for) again on every round.
+	urls := make([]string, len(imgs))
+	for i, im := range imgs {
+		urls[i] = im.dataURL()
 	}
 	emit(Event{Type: "user", Message: userMsg})
 
 	client := &ai.Client{BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.Model}
+	modelKey := cfg.BaseURL + "|" + cfg.Model
 	s.mu.Lock()
-	useTools := !s.noTools[cfg.BaseURL+"|"+cfg.Model]
+	useTools := !s.noTools[modelKey]
 	s.mu.Unlock()
+	// With images attached, a rejected request may be about the images rather
+	// than the tools: only remember "no tools" once a tool-less retry works.
+	suspectTools := false
 
 	meta := agentdb.ChatMeta{Model: cfg.Model}
 	var answer strings.Builder
@@ -144,7 +167,7 @@ func (s *Service) Send(ctx context.Context, req Request, emit func(Event)) error
 		return nil
 	}
 
-	msgs := s.buildMessages(snap, history, *userMsg, useTools)
+	msgs := s.buildMessages(snap, history, *userMsg, urls, useTools)
 	for round := 0; ; round++ {
 		var tools []ai.ToolSpec
 		if useTools && round < maxRounds {
@@ -157,14 +180,25 @@ func (s *Service) Send(ctx context.Context, req Request, emit func(Event)) error
 		})
 		if errors.Is(err, ai.ErrToolsUnsupported) && len(tools) > 0 {
 			slog.Warn("model rejected tools, retrying without", "model", cfg.Model, "err", err)
-			s.mu.Lock()
-			s.noTools[cfg.BaseURL+"|"+cfg.Model] = true
-			s.mu.Unlock()
 			useTools = false
-			meta.Note = "当前模型不支持调用工具，只根据 @ 的人或群的聊天记录回答"
-			emit(Event{Type: "note", Text: meta.Note})
-			msgs = s.buildMessages(snap, history, *userMsg, false)
+			if len(urls) > 0 {
+				suspectTools = true
+			} else {
+				s.rememberNoTools(modelKey)
+				meta.Note = "当前模型不支持调用工具，只根据 @ 的人或群的聊天记录回答"
+				emit(Event{Type: "note", Text: meta.Note})
+			}
+			msgs = s.buildMessages(snap, history, *userMsg, urls, false)
 			continue
+		}
+		if err != nil && len(urls) > 0 && ai.IsRequestRejected(err) {
+			return finish(fmt.Sprintf("当前模型可能不支持图片（%v）。请在 设置 → AI 助手 中换用支持识图的模型，例如 qwen-vl-max、glm-4v、gpt-4o，或去掉图片后重试。", err))
+		}
+		if err == nil && suspectTools {
+			suspectTools = false
+			s.rememberNoTools(modelKey)
+			meta.Note = "当前模型不支持调用工具，只根据 @ 的人或群的聊天记录和图片回答"
+			emit(Event{Type: "note", Text: meta.Note})
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -197,6 +231,12 @@ func (s *Service) Send(ctx context.Context, req Request, emit func(Event)) error
 			return finish("")
 		}
 	}
+}
+
+func (s *Service) rememberNoTools(key string) {
+	s.mu.Lock()
+	s.noTools[key] = true
+	s.mu.Unlock()
 }
 
 func (s *Service) runTool(ctx context.Context, call ai.ToolCall) string {
@@ -249,22 +289,30 @@ func (s *Service) systemPrompt(snap *store.Snapshot, tools bool) string {
 	}
 	b.WriteString("- 引用具体内容时注明会话名和时间。不要编造数据中没有出现的事实，不确定时如实说明。\n")
 	b.WriteString("- 用户要你起草回复或消息时，直接给出可以复制发送的文本。\n")
+	b.WriteString("- 用户附上的图片（截图、报错、文档等）先看懂内容，再结合聊天记录回答；看不清或无法识别时如实说明。\n")
 	b.WriteString("- 用中文回答，使用 Markdown，简洁、直接。")
 	return b.String()
 }
 
 func userContent(m agentdb.ChatMessage, withContext bool) string {
-	if !withContext || strings.TrimSpace(m.Context) == "" {
-		return m.Content
+	content := m.Content
+	if n := len(m.Meta.Images); n > 0 {
+		content += "\n" + fmt.Sprintf(imageNote, n)
 	}
-	return "【引用资料】\n" + m.Context + "\n\n【问题】\n" + m.Content
+	if !withContext || strings.TrimSpace(m.Context) == "" {
+		return content
+	}
+	return "【引用资料】\n" + m.Context + "\n\n【问题】\n" + content
 }
 
 // buildMessages assembles system prompt, earlier turns and the new message.
 // @mention context is kept for the newest messages and dropped from older
 // ones when the history grows too long.
-func (s *Service) buildMessages(snap *store.Snapshot, history []agentdb.ChatMessage, cur agentdb.ChatMessage, tools bool) []ai.ChatMessage {
+func (s *Service) buildMessages(snap *store.Snapshot, history []agentdb.ChatMessage, cur agentdb.ChatMessage, images []string, tools bool) []ai.ChatMessage {
 	sys := s.systemPrompt(snap, tools)
+	if len(images) > 0 {
+		cur.Meta.Images = nil // sent as images, not as the "(附图片)" note
+	}
 	curContent := userContent(cur, true)
 	if !tools {
 		if hits := keywordContext(snap, cur.Content); hits != "" {
@@ -287,6 +335,9 @@ func (s *Service) buildMessages(snap *store.Snapshot, history []agentdb.ChatMess
 			continue
 		}
 		content := m.Content
+		if m.Role == "user" {
+			content = userContent(m, false)
+		}
 		if m.Role == "user" && m.Context != "" && contexts < 2 && used+len([]rune(m.Context)) < historyBudget/2 {
 			content = userContent(m, true)
 			contexts++
@@ -305,7 +356,7 @@ func (s *Service) buildMessages(snap *store.Snapshot, history []agentdb.ChatMess
 	for i := len(turns) - 1; i >= 0; i-- {
 		out = append(out, turns[i])
 	}
-	return append(out, ai.ChatMessage{Role: "user", Content: curContent})
+	return append(out, ai.ChatMessage{Role: "user", Content: curContent, Images: images})
 }
 
 // keywordContext searches the whole history for terms the user put in

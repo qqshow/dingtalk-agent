@@ -37,6 +37,7 @@ const ICONS = {
   stop: '<rect x="7" y="7" width="10" height="10" rx="2"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+  image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="9.5" r="1.6"/><path d="m4 17 4.5-4.5 3.5 3.5 2.5-2.5L20 18"/>',
 };
 const icon = (name, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
 
@@ -777,7 +778,10 @@ function renderAIProgress(date) {
 }
 
 // ================================================================ AI CHAT
-const AC = { session: 0, sessions: [], mentions: new Map(), streaming: null, pop: { items: [], idx: 0 } };
+const AC = { session: 0, sessions: [], mentions: new Map(), images: [], streaming: null, pop: { items: [], idx: 0 } };
+// Attached images are scaled down in the browser before sending: vision
+// models downscale anyway, and smaller uploads keep requests fast and cheap.
+const AI_IMG = { max: 4, side: 1568, quality: 0.85, maxFile: 20 << 20 };
 // Prompts with a 「…」 placeholder are filled into the input with the
 // placeholder selected, instead of being sent right away.
 const AI_SUGGESTIONS = [
@@ -807,7 +811,8 @@ async function viewAI(r, alive) {
     </aside>
     <section class="ai-main">
       <div class="ai-msgs" id="aiMsgs"></div>
-      <div class="ai-composer">
+      <div class="ai-composer" id="aiComposer">
+        <div class="ai-attach" id="aiAttach" hidden></div>
         <div class="ai-input-wrap">
           <textarea id="aiInput" rows="1" placeholder="问问 AI，例如：之前「数据库连接超时」是怎么解决的？也可以 @ 某人或某群"></textarea>
           <div class="mention-pop" id="mentionPop" hidden></div>
@@ -816,7 +821,9 @@ async function viewAI(r, alive) {
           <select class="input" id="aiDays" title="@ 的人或群附带多长时间的聊天记录">
             <option value="1">今天</option><option value="3">近 3 天</option><option value="7" selected>近 7 天</option><option value="30">近 30 天</option>
           </select>
-          <span class="muted ai-hint">@ 的人或群会附上这段时间的聊天记录 · Enter 发送，Shift+Enter 换行</span>
+          <button class="btn btn-ghost btn-icon" id="aiImgBtn" title="添加图片（也可以粘贴或拖入）">${icon('image')}</button>
+          <input type="file" id="aiImgFile" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+          <span class="muted ai-hint">@ 的人或群会附上这段时间的聊天记录 · 可粘贴或拖入图片 · Enter 发送，Shift+Enter 换行</span>
           <div class="grow"></div>
           <button class="btn btn-primary" id="aiSend">${icon('send')}发送</button>
         </div>
@@ -824,7 +831,7 @@ async function viewAI(r, alive) {
     </section></div>`;
   try { const d = localStorage.getItem('ai-days'); if (d) $('#aiDays').value = d; } catch (_) {}
   $('#aiDays').onchange = e => { try { localStorage.setItem('ai-days', e.target.value); } catch (_) {} };
-  $('#aiNew').onclick = () => { if (!AC.streaming) { AC.mentions.clear(); go('#/ai'); } };
+  $('#aiNew').onclick = () => { if (!AC.streaming) { AC.mentions.clear(); AC.images = []; go('#/ai'); } };
   bindComposer(ready);
   await refreshSessions();
   if (AC.session) await loadSession(AC.session);
@@ -846,7 +853,7 @@ function renderAIEmpty(st) {
     <p class="muted">AI 可以查阅你的聊天记录、日程和待办。输入 <b>@</b> 选择某人或某群，会附上与他们的聊天记录。</p>
     ${AI_SUGGESTIONS.map(([group, items]) => `<div class="ai-sg-group">${esc(group)}</div>
       <div class="ai-suggest">${items.map(([t, q]) => `<button class="ai-sg" data-q="${esc(q)}"><b>${esc(t)}</b><span>${esc(q)}</span></button>`).join('')}</div>`).join('')}
-    <p class="muted ai-privacy">🔒 你提问时，相关的聊天内容会发送给你配置的模型服务商。</p></div>`;
+    <p class="muted ai-privacy">🔒 你提问时，相关的聊天内容和附上的图片会发送给你配置的模型服务商。</p></div>`;
   box.onclick = e => {
     const b = e.target.closest('.ai-sg'); if (!b) return;
     const q = b.dataset.q, input = $('#aiInput');
@@ -902,10 +909,14 @@ function highlightMentions(text, mentions) {
   }
   return h;
 }
+function userImages(srcs) {
+  return srcs.length ? `<div class="ai-imgs">${srcs.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="图片" loading="lazy"></a>`).join('')}</div>` : '';
+}
 function userBubble(m) {
   const meta = m.meta || {};
   const ctx = meta.mentions && meta.mentions.length ? `<div class="ai-ctx">${icon('link')}已附上 ${meta.mentions.map(x => esc(x.title)).join('、')} ${meta.days === 1 ? '今天' : `近 ${meta.days || 7} 天`}的聊天记录</div>` : '';
-  return `<div class="ai-row user"><div class="ai-bubble">${highlightMentions(m.content, meta.mentions).replace(/\n/g, '<br>')}</div>${ctx}</div>`;
+  const imgs = userImages((meta.images || []).map(n => `/api/chat/images/${m.session_id}/${encodeURIComponent(n)}`));
+  return `<div class="ai-row user">${imgs}<div class="ai-bubble">${highlightMentions(m.content, meta.mentions).replace(/\n/g, '<br>')}</div>${ctx}</div>`;
 }
 function toolLine(t, running) {
   return `<div class="ai-tool ${t.error ? 'err' : ''}">${running ? '<span class="spinner"></span>' : icon(t.error ? 'close' : 'check')}
@@ -946,7 +957,9 @@ function bindComposer(st) {
   });
   pop.addEventListener('mousedown', e => { const it = e.target.closest('[data-i]'); if (it) { e.preventDefault(); insertMention(AC.pop.items[+it.dataset.i]); } });
   $('#aiSend').onclick = () => AC.streaming ? stopAI() : sendAI();
-  if (!st || !st.ready) { input.disabled = true; $('#aiSend').disabled = true; input.placeholder = '请先在设置中接入 AI 模型'; }
+  if (!st || !st.ready) { input.disabled = true; $('#aiSend').disabled = true; $('#aiImgBtn').disabled = true; input.placeholder = '请先在设置中接入 AI 模型'; }
+  else bindImageInput();
+  renderAttach();
   $('#aiMsgs').addEventListener('click', e => {
     const cp = e.target.closest('[data-copy-md]');
     if (cp) {
@@ -1024,16 +1037,73 @@ function insertMention(c, append = false) {
   input.dispatchEvent(new Event('input'));
 }
 
+// ---- image attachments: button, paste and drag-and-drop
+function bindImageInput() {
+  const file = $('#aiImgFile'), composer = $('#aiComposer');
+  $('#aiImgBtn').onclick = () => file.click();
+  file.onchange = () => { addImages([...file.files]); file.value = ''; };
+  $('#aiInput').addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.items || [])].filter(it => it.kind === 'file' && it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean);
+    if (files.length) { e.preventDefault(); addImages(files); }
+  });
+  composer.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); composer.classList.add('drop'); } });
+  composer.addEventListener('dragleave', e => { if (!composer.contains(e.relatedTarget)) composer.classList.remove('drop'); });
+  composer.addEventListener('drop', e => {
+    composer.classList.remove('drop');
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    addImages([...e.dataTransfer.files]);
+  });
+  $('#aiAttach').addEventListener('click', e => {
+    const rm = e.target.closest('[data-rm]'); if (!rm) return;
+    AC.images = AC.images.filter((_, i) => i !== +rm.dataset.rm);
+    renderAttach();
+  });
+}
+async function addImages(files) {
+  for (const f of files) {
+    if (AC.images.length >= AI_IMG.max) { toast(`一次最多发送 ${AI_IMG.max} 张图片`); break; }
+    if (!/^image\/(png|jpeg|webp|gif)$/.test(f.type)) { toast(`不支持的文件：${f.name || f.type || '未知类型'}`); continue; }
+    if (f.size > AI_IMG.maxFile) { toast(`图片太大：${f.name}`); continue; }
+    try { AC.images = [...AC.images, await shrinkImage(f)]; } catch (_) { toast(`无法读取图片：${f.name}`); }
+    renderAttach();
+  }
+  $('#aiInput').focus();
+}
+// shrinkImage scales an image so its long side is at most AI_IMG.side and
+// re-encodes it as JPEG on white (transparent areas would turn black).
+async function shrinkImage(file) {
+  const bmp = await createImageBitmap(file);
+  try {
+    const k = Math.min(1, AI_IMG.side / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * k)), h = Math.max(1, Math.round(bmp.height * k));
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+    g.drawImage(bmp, 0, 0, w, h);
+    return cv.toDataURL('image/jpeg', AI_IMG.quality);
+  } finally { bmp.close(); }
+}
+function renderAttach() {
+  const box = $('#aiAttach'); if (!box) return;
+  box.hidden = !AC.images.length;
+  box.innerHTML = AC.images.map((u, i) => `<div class="ai-thumb"><img src="${u}" alt="图片 ${i + 1}">
+    <button class="ai-thumb-rm" data-rm="${i}" title="移除">${icon('close')}</button></div>`).join('');
+}
+
 // ---- sending and streaming
 async function sendAI() {
   const input = $('#aiInput');
   const text = input.value.trim();
-  if (!text || AC.streaming) return;
+  const images = AC.images;
+  if ((!text && !images.length) || AC.streaming) return;
   const mentions = [...AC.mentions].filter(([t]) => text.includes('@' + t)).map(([, cid]) => cid);
   input.value = ''; input.style.height = 'auto';
+  AC.images = []; renderAttach();
   const box = $('#aiMsgs');
   if (box.querySelector('.ai-welcome')) box.innerHTML = '';
-  box.insertAdjacentHTML('beforeend', `<div class="ai-row user pending"><div class="ai-bubble">${esc(text).replace(/\n/g, '<br>')}</div></div>`);
+  box.insertAdjacentHTML('beforeend', `<div class="ai-row user pending">${userImages(images)}<div class="ai-bubble">${esc(text || '请看图片').replace(/\n/g, '<br>')}</div></div>`);
   box.insertAdjacentHTML('beforeend', aiBubble({ content: '', meta: {} }, true).replace('class="ai-row assistant"', 'class="ai-row assistant live"'));
   scrollAI(true);
   const ctrl = new AbortController();
@@ -1069,7 +1139,7 @@ async function sendAI() {
   };
   try {
     const res = await fetch('/api/chat/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
-      body: JSON.stringify({ session_id: AC.session, text, mentions, days: +$('#aiDays').value }) });
+      body: JSON.stringify({ session_id: AC.session, text, mentions, images, days: +$('#aiDays').value }) });
     if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).detail || msg; } catch (_) {} throw new Error(msg); }
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = '';

@@ -56,6 +56,7 @@ type ToolUse struct {
 type ChatMeta struct {
 	Mentions []Mention `json:"mentions,omitempty"`
 	Days     int       `json:"days,omitempty"`
+	Images   []string  `json:"images,omitempty"` // file names under the session's image folder
 	Tools    []ToolUse `json:"tools,omitempty"`
 	Model    string    `json:"model,omitempty"`
 	Error    string    `json:"error,omitempty"`

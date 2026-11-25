@@ -3,7 +3,9 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 
@@ -78,7 +80,27 @@ func (s *Server) apiChatDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err)
 		return
 	}
+	if err := os.RemoveAll(chat.SessionImageDir(s.a.Cfg.DataDir, id)); err != nil {
+		slog.Warn("remove chat images", "session", id, "err", err)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+// apiChatImage serves an image attached to a chat message.
+func (s *Server) apiChatImage(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	p, err := chat.ImagePath(s.a.Cfg.DataDir, id, r.PathValue("name"))
+	if err != nil {
+		writeErr(w, 400, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeFile(w, r, p)
 }
 
 // apiChatPeople searches contacts for @mentions, including people we only
@@ -115,7 +137,7 @@ func (s *Server) apiChatPeople(w http.ResponseWriter, r *http.Request) {
 // connection (the page's stop button) cancels the answer.
 func (s *Server) apiChatSend(w http.ResponseWriter, r *http.Request) {
 	var req chat.Request
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBodyLimit(r, &req, chat.MaxBodyBytes); err != nil {
 		writeErr(w, 400, err)
 		return
 	}

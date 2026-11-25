@@ -86,6 +86,7 @@ func (s *Server) routes(mcp http.Handler) {
 	m.HandleFunc("DELETE /api/chat/sessions/{id}", s.apiChatDelete)
 	m.HandleFunc("POST /api/chat/send", s.apiChatSend)
 	m.HandleFunc("GET /api/chat/people", s.apiChatPeople)
+	m.HandleFunc("GET /api/chat/images/{id}/{name}", s.apiChatImage)
 	m.HandleFunc("GET /api/update/status", s.apiUpdateStatus)
 	m.HandleFunc("POST /api/update/check", s.apiUpdateCheck)
 	m.HandleFunc("POST /api/update/apply", s.apiUpdateApply)
@@ -151,7 +152,11 @@ func qBool(r *http.Request, key string) bool {
 }
 
 func decodeBody(r *http.Request, v any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 8<<20))
+	return decodeBodyLimit(r, v, 8<<20)
+}
+
+func decodeBodyLimit(r *http.Request, v any, limit int64) error {
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, limit))
 	return dec.Decode(v)
 }
 

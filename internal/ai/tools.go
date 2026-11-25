@@ -32,8 +32,28 @@ type ToolCall struct {
 type ChatMessage struct {
 	Role       string     // system | user | assistant | tool
 	Content    string     //
+	Images     []string   // user only: data URLs (data:image/...;base64,...)
 	ToolCalls  []ToolCall // assistant only
 	ToolCallID string     // tool only
+}
+
+// StatusError is a non-2xx answer from the AI endpoint.
+type StatusError struct {
+	Code int
+	Msg  string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("AI 接口返回 %d: %s", e.Code, e.Msg) }
+
+// IsRequestRejected reports whether err is a 4xx answer other than an
+// authentication, permission or rate-limit error: the endpoint refused what
+// was sent (for example tools or images the model does not support).
+func IsRequestRejected(err error) bool {
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code/100 != 4 {
+		return false
+	}
+	return se.Code != 401 && se.Code != 403 && se.Code != 429
 }
 
 // ErrToolsUnsupported means the endpoint rejected the request because of the
@@ -54,9 +74,36 @@ type wireToolCall struct {
 
 type wireMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content"`
+	Content    any            `json:"content"` // string, or []wirePart when images are attached
 	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+// wirePart is one item of an OpenAI-style multimodal content array.
+type wirePart struct {
+	Type     string   `json:"type"` // text | image_url
+	Text     string   `json:"text,omitempty"`
+	ImageURL *wireURL `json:"image_url,omitempty"`
+}
+
+type wireURL struct {
+	URL string `json:"url"`
+}
+
+// wireContent keeps plain-text messages as a string, so endpoints without
+// vision support see exactly what they saw before images existed.
+func wireContent(m ChatMessage) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+	parts := make([]wirePart, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, wirePart{Type: "text", Text: m.Content})
+	}
+	for _, u := range m.Images {
+		parts = append(parts, wirePart{Type: "image_url", ImageURL: &wireURL{URL: u}})
+	}
+	return parts
 }
 
 type wireTool struct {
@@ -103,7 +150,7 @@ func (c *Client) Converse(ctx context.Context, msgs []ChatMessage, tools []ToolS
 	}
 	req := toolRequest{Model: c.Model, Stream: true, Temperature: 0.4}
 	for _, m := range msgs {
-		wm := wireMessage{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
+		wm := wireMessage{Role: m.Role, Content: wireContent(m), ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			wm.ToolCalls = append(wm.ToolCalls, wireToolCall{ID: tc.ID, Type: "function",
 				Function: wireFunc{Name: tc.Name, Arguments: tc.Arguments}})
@@ -137,11 +184,11 @@ func (c *Client) Converse(ctx context.Context, msgs []ChatMessage, tools []ToolS
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		msg := errText(b)
-		if len(tools) > 0 && resp.StatusCode/100 == 4 && resp.StatusCode != 401 && resp.StatusCode != 403 && resp.StatusCode != 429 {
-			return nil, Usage{}, fmt.Errorf("%w: %s", ErrToolsUnsupported, msg)
+		se := &StatusError{Code: resp.StatusCode, Msg: errText(b)}
+		if len(tools) > 0 && IsRequestRejected(se) {
+			return nil, Usage{}, fmt.Errorf("%w: %w", ErrToolsUnsupported, se)
 		}
-		return nil, Usage{}, fmt.Errorf("AI 接口返回 %d: %s", resp.StatusCode, msg)
+		return nil, Usage{}, se
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return readToolStream(resp.Body, onText)

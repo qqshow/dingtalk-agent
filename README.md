@@ -202,6 +202,9 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
   - 选择人：会附上你和他的单聊记录，以及他在群里的发言。没有单聊过的同事也能选到（标为"群成员"），会附上他在群里的发言和群里 @ 他的消息
   - 选择群：会附上群里的聊天记录
 - AI 会按需查阅数据：按名称查找会话、读取某个会话的消息、搜索关键字、查看统计、日程和待办，每一步都会显示在回答上方
+- 可以附上图片（点输入框下方的图片按钮，或直接粘贴、拖入），例如报错截图、界面截图、文档照片，每次最多 4 张。
+  图片在浏览器里缩小到长边 1568 像素后发送，原图不会上传；需要支持识图的模型（如 qwen-vl-max、glm-4v、gpt-4o），
+  不支持的模型会提示更换。图片保存在本地 `data/chat-images/`，删除对话时一并删除
 - 可以让 AI 起草回复（复制后自己在钉钉里发送），或让它把讨论出的事项记成待办
 - 在消息页面打开某个会话，点右上角"问 AI"，会直接 @ 这个人或群开始对话
 - 对话记录保存在本地 `data/agent.db`，可以随时回看或删除
@@ -210,7 +213,7 @@ dingtalk-agent prompt -date today         输出推荐的每日总结提示词
 如果模型不支持，AI 会根据你 @ 的人或群的聊天记录回答；问题中用「」括起来的关键词会先在全部历史中搜索，把结果一起交给 AI。回答中会有提示。
 
 **隐私**：生成日报时，只把与你相关的聊天发给模型服务商：单聊、你发过言或被 @ 的群、项目群；其他群只发送统计数字，机器人消息不发送。
-周报只使用已生成的日报和事项。AI 对话中，你 @ 的人或群的聊天记录，以及 AI 为回答问题查阅的内容，会发送给模型服务商。
+周报只使用已生成的日报和事项。AI 对话中，你 @ 的人或群的聊天记录、你附上的图片，以及 AI 为回答问题查阅的内容，会发送给模型服务商。
 想让数据完全不离开电脑，请使用本机的 Ollama。
 
 API Key 保存在 `data/config.json` 中，也可以用环境变量 `DINGTALK_AI_API_KEY` 提供，这种方式不会写入文件。
@@ -286,7 +289,8 @@ DELETE /api/agent/todos/{id}
 GET    /api/settings
 PUT    /api/settings                         {"sync_interval_minutes":10}
 POST   /api/ai/run                           {"kind":"daily|weekly","date":"today"}  由内置 AI 生成日报 / 周报
-POST   /api/chat/send                        {"session_id":0,"text":"...","mentions":["<cid>"],"days":7}  AI 对话（SSE 流式返回）
+POST   /api/chat/send                        {"session_id":0,"text":"...","mentions":["<cid>"],"days":7,"images":["data:image/jpeg;base64,..."]}  AI 对话（SSE 流式返回）
+GET    /api/chat/images/{id}/{name}          AI 对话中附上的图片
 GET    /api/chat/sessions                    AI 对话列表；GET/PATCH/DELETE /api/chat/sessions/{id}
 GET    /api/chat/people?q=王&no_chat=1       搜索联系人（用于 @），no_chat=1 只返回没有单聊的人；对话中用 "u:<uid>" 引用
 GET    /api/ai/status                        内置 AI 的运行进度、上次结果和下次自动运行时间

@@ -80,3 +80,53 @@ func TestConverseToolsUnsupported(t *testing.T) {
 		t.Fatalf("without tools: %+v %v", out, err)
 	}
 }
+
+func TestConverseSendsImagesAsContentParts(t *testing.T) {
+	var got []map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []map[string]json.RawMessage `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		got = req.Messages
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}]}`)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, Model: "m"}
+	msgs := []ChatMessage{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "看图", Images: []string{"data:image/png;base64,AAAA"}},
+	}
+	if _, _, err := c.Converse(context.Background(), msgs, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if string(got[0]["content"]) != `"sys"` {
+		t.Errorf("text-only message must stay a string, got %s", got[0]["content"])
+	}
+	want := `[{"type":"text","text":"看图"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]`
+	if string(got[1]["content"]) != want {
+		t.Errorf("image message content = %s\nwant %s", got[1]["content"], want)
+	}
+}
+
+func TestIsRequestRejected(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{&StatusError{Code: 400}, true},
+		{&StatusError{Code: 422}, true},
+		{fmt.Errorf("%w: %w", ErrToolsUnsupported, &StatusError{Code: 400}), true},
+		{&StatusError{Code: 401}, false},
+		{&StatusError{Code: 403}, false},
+		{&StatusError{Code: 429}, false},
+		{&StatusError{Code: 500}, false},
+		{errors.New("network down"), false},
+	}
+	for _, c := range cases {
+		if got := IsRequestRejected(c.err); got != c.want {
+			t.Errorf("IsRequestRejected(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
