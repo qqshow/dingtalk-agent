@@ -173,6 +173,7 @@ const S = {
   convSearch: '',
   convsLoadedAt: 0,
   chat: null, // { cid, offset, total, msgs, loading }
+  dataKey: null, // latest message time seen in the sync status; a change means new data
 };
 
 async function loadConvs(force = false) {
@@ -1654,9 +1655,16 @@ async function viewSettings(r, alive) {
 }
 
 // ================================================================== SYNC
-async function refreshSyncStatus() {
+// refreshSyncStatus updates the sync button and, when a background sync has
+// brought in newer messages, refreshes what the page shows. quiet only
+// records the current data so a refresh the caller already did is not repeated.
+async function refreshSyncStatus(quiet = false) {
   try {
     const s = await api('/api/sync/status');
+    const key = s.last_sync_time || 0;
+    const changed = S.dataKey !== null && key !== S.dataKey && !s.is_syncing;
+    if (!s.is_syncing) S.dataKey = key;
+    if (changed && !quiet) refreshLiveData();
     const btn = $('#syncBtn');
     btn.classList.toggle('spinning', s.is_syncing);
     btn.classList.toggle('error', !!s.last_error && !s.is_syncing);
@@ -1675,7 +1683,41 @@ async function syncNow() {
     toast('已同步最新数据');
     render();
   } catch (e) { toast('同步失败：' + e.message, 4000); }
-  refreshSyncStatus();
+  refreshSyncStatus(true);
+}
+
+// refreshLiveData reloads the conversation list and appends new messages to
+// the open conversation in place, keeping scroll position and the search box.
+async function refreshLiveData() {
+  try { await loadConvs(true); } catch (_) { return; }
+  if (parseRoute().name !== 'chat' || !$('#convList')) return;
+  const list = $('#convList'), top = list.scrollTop;
+  renderConvList();
+  list.scrollTop = top;
+  await appendNewMessages();
+}
+async function appendNewMessages() {
+  const ch = S.chat; if (!ch || ch.loading) return;
+  const cid = ch.cid;
+  let d;
+  try { d = await api(`/api/conversations/${encodeURIComponent(cid)}/messages?limit=50&offset=0`); } catch (_) { return; }
+  if (S.chat !== ch || ch.loading) return;
+  const seen = new Set(ch.msgs.map(m => m.id));
+  const fresh = d.messages.filter(m => !seen.has(m.id));
+  if (!fresh.length) return;
+  const body = $('#chatBody'); if (!body) return;
+  if (fresh.length === d.messages.length) { // more new messages than one page: reload from the newest
+    ch.msgs = []; ch.offset = 0;
+    await loadChatPage(true);
+    return;
+  }
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+  const prevTop = body.scrollTop;
+  ch.msgs = ch.msgs.concat(fresh);
+  ch.total = d.total;
+  renderMessages();
+  body.scrollTop = atBottom ? body.scrollHeight : prevTop;
+  $('#chatMeta').textContent = `${$('#chatMeta').textContent.split(' · 共')[0]} · 共 ${ch.total} 条消息`;
 }
 
 // ================================================================ UPDATE
