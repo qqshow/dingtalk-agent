@@ -201,6 +201,19 @@ type Stats struct {
 	LatestMessageStr   string `json:"latest_message_str"`
 }
 
+// LatestMessageTime returns the newest timestamp without counting the messages.
+func (s *Snapshot) LatestMessageTime() int64 {
+	var latest int64
+	for _, t := range s.tables {
+		var mx any
+		s.DB.QueryRow(`SELECT MAX(createdAt) FROM "` + t + `"`).Scan(&mx)
+		if v, ok := mx.(int64); ok && v > latest {
+			latest = v
+		}
+	}
+	return latest
+}
+
 func (s *Snapshot) Stats() Stats {
 	st := Stats{TotalConversations: len(s.Convs), TotalUsers: len(s.Users)}
 	for _, c := range s.Convs {

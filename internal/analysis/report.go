@@ -3,10 +3,10 @@ package analysis
 import (
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 )
 
 type Report struct {
@@ -136,15 +136,6 @@ func Load(s *store.Snapshot, p Period) (*Input, error) {
 	return &Input{Snap: s, Period: p, Msgs: msgs}, nil
 }
 
-func snippet(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
-}
-
 func isSelfChat(c *store.Conversation, me int64) bool {
 	return c != nil && c.Type == "single" && c.OtherUID == strconv.FormatInt(me, 10)
 }
@@ -262,7 +253,7 @@ func BuildReport(in *Input) *Report {
 			}
 			r.Awaiting = append(r.Awaiting, Pending{
 				CID: cid, ConvTitle: c.Title, Type: "single", Reason: "单聊未回复",
-				LastSender: last.SenderName, LastAt: last.CreatedAtStr, LastText: snippet(last.AgentText(), 200),
+				LastSender: last.SenderName, LastAt: last.CreatedAtStr, LastText: textutil.Snippet(last.AgentText(), 200),
 				Unanswered: max(unanswered, 1), MsgID: last.ID,
 			})
 		}
@@ -277,7 +268,7 @@ func BuildReport(in *Input) *Report {
 	pendingGroup := map[string]*Pending{}
 	for _, m := range mentionMsgs {
 		ref := MsgRef{CID: m.CID, ConvTitle: s.ConvTitle(m.CID), MsgID: m.ID, Sender: m.SenderName,
-			Time: m.CreatedAtStr, Text: snippet(m.AgentText(), 300)}
+			Time: m.CreatedAtStr, Text: textutil.Snippet(m.AgentText(), 300)}
 		if t, ok := lastMine[m.CID]; ok && t > m.CreatedAt {
 			ref.Replied, ref.RepliedAt = true, store.FormatTS(t)
 		} else {

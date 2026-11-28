@@ -17,6 +17,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/app"
 	"github.com/qqshow/dingtalk-agent/internal/config"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 )
 
 // AuthorPrefix marks summaries written by the built-in assistant, so a
@@ -125,7 +126,7 @@ func (r *Runner) Test(ctx context.Context, c config.AIConfig) (string, time.Dura
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	out, _, err := r.client(c).Chat(ctx, []Message{{Role: "user", Content: "请只回复两个字：收到"}}, nil)
-	return snippet(out, 60), time.Since(start), err
+	return textutil.Snippet(out, 60), time.Since(start), err
 }
 
 // Start launches a job in the background. kind is "daily" or "weekly";

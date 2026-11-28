@@ -479,7 +479,13 @@ function openViewer(imgEl) {
   $('#viewer').hidden = false;
   showViewerImage();
 }
-function closeViewer() { $('#viewer').hidden = true; $('#vImg').removeAttribute('src'); }
+function closeViewer() {
+  $('#viewer').hidden = true;
+  V.list = [];
+  const img = $('#vImg');
+  img.onload = null;
+  img.removeAttribute('src');
+}
 function showViewerImage() {
   const el = V.list[V.idx]; if (!el) return;
   const img = $('#vImg');
@@ -1291,7 +1297,7 @@ async function viewCalendar(r, alive) {
         <h1>${y}年${m}月</h1><div class="grow"></div>
         <div class="cal-legend"><span><i style="background:var(--success)"></i>会议</span><span><i style="background:var(--warning)"></i>审批待办</span><span><i style="background:var(--purple)"></i>AI听记</span><span><i style="background:var(--text-3)"></i>请假</span></div>
       </div>
-      <div class="cal-week">${['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map(w => `<div>${w}</div>`).join('')}</div>
+      <div class="cal-week">${WEEK.map(w => `<div>${w}</div>`).join('')}</div>
       <div class="cal-grid" id="calGrid" style="grid-template-rows:repeat(${weeks},1fr)"></div>
     </div>
     <aside class="cal-side"><div class="cal-side-head"><h2 id="sideTitle"></h2><div class="sub" id="sideSub"></div></div><div class="cal-side-body" id="sideBody"></div></aside>
@@ -1582,7 +1588,7 @@ async function viewSettings(r, alive) {
   const row = (k, v, extra = '') => `<div class="set-row"><div class="set-k">${k}</div><div class="set-v">${v}</div>${extra}</div>`;
   const copyBtn = text => `<button class="btn btn-sm btn-ghost" data-copy="${esc(text)}">${icon('copy')}复制</button>`;
   const mcpCmd = `claude mcp add --transport http dingtalk ${st.mcp_url}`;
-  $('#view').innerHTML = `<div class="page"><div class="page-inner" style="max-width:860px">
+  $('#view').innerHTML = `<div class="page"><div class="page-inner" id="settingsPage" style="max-width:860px">
     <div class="page-head"><h1>设置</h1></div>
 
     ${aiSettingsCard(ai.settings, ai.status)}
@@ -1648,7 +1654,7 @@ async function viewSettings(r, alive) {
     try { await api('/api/settings', { method: 'PUT', json: { auto_update_check: e.target.checked } }); toast(e.target.checked ? '已开启自动检查更新' : '已关闭自动检查更新'); }
     catch (err) { toast(err.message); }
   };
-  $('#view').addEventListener('click', e => {
+  $('#settingsPage').addEventListener('click', e => {
     const b = e.target.closest('[data-copy]');
     if (b) navigator.clipboard.writeText(b.dataset.copy).then(() => toast('已复制'));
   });

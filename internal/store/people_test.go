@@ -55,4 +55,8 @@ func TestSearchPeople(t *testing.T) {
 	if n := len(s.SearchPeople("", 3)); n != 3 {
 		t.Errorf("limit: got %d", n)
 	}
+	withoutChat := s.SearchPeopleWithoutChat("王", 2)
+	if len(withoutChat) != 2 || withoutChat[0] != got[1] || withoutChat[1] != got[2] {
+		t.Errorf("expected the first two matches without a single chat, got %v", withoutChat)
+	}
 }

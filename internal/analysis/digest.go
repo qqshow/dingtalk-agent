@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 	"sort"
 	"strings"
 	"time"
@@ -73,7 +74,7 @@ func BuildDigest(in *Input, rep *Report, o DigestOptions) *Digest {
 		if c == nil || isSelfChat(c, s.MyUID) {
 			continue
 		}
-		text := snippet(m.AgentText(), o.MaxMsgChars)
+		text := textutil.Snippet(m.AgentText(), o.MaxMsgChars)
 		if text == "" {
 			continue
 		}

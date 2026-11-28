@@ -1,17 +1,13 @@
 package ai
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"sort"
 	"strings"
-	"time"
 )
 
 // ToolSpec describes a function the model may call.
@@ -164,22 +160,9 @@ func (c *Client) Converse(ctx context.Context, msgs []ChatMessage, tools []ToolS
 		req.Tools = append(req.Tools, wt)
 	}
 	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint(), bytes.NewReader(body))
+	resp, err := c.postCompletion(ctx, body)
 	if err != nil {
 		return nil, Usage{}, err
-	}
-	hreq.Header.Set("Content-Type", "application/json")
-	hreq.Header.Set("Accept", "text/event-stream, application/json")
-	if k := strings.TrimSpace(c.APIKey); k != "" {
-		hreq.Header.Set("Authorization", "Bearer "+k)
-	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Minute}
-	}
-	resp, err := hc.Do(hreq)
-	if err != nil {
-		return nil, Usage{}, fmt.Errorf("请求 AI 接口失败: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -235,17 +218,8 @@ func readToolStream(r io.Reader, onText func(string)) (*ChatMessage, Usage, erro
 		args     strings.Builder
 	}
 	calls := map[int]*partial{}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 4<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			break
-		}
+	sc := newCompletionStream(r)
+	for data, ok := sc.next(); ok; data, ok = sc.next() {
 		var tr toolResponse
 		if json.Unmarshal([]byte(data), &tr) != nil {
 			continue

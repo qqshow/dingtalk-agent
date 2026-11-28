@@ -79,17 +79,10 @@ type apiError struct {
 	Code    any    `json:"code"`
 }
 
-// Chat sends messages and returns the full reply. progress, when non-nil, is
-// called with the number of characters received so far (reasoning included)
-// while the reply streams in.
-func (c *Client) Chat(ctx context.Context, msgs []Message, progress func(chars int)) (string, Usage, error) {
-	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.Model) == "" {
-		return "", Usage{}, errors.New("AI 接口地址和模型名不能为空")
-	}
-	body, _ := json.Marshal(chatRequest{Model: c.Model, Messages: msgs, Stream: true, Temperature: 0.3})
+func (c *Client) postCompletion(ctx context.Context, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint(), bytes.NewReader(body))
 	if err != nil {
-		return "", Usage{}, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream, application/json")
@@ -102,7 +95,48 @@ func (c *Client) Chat(ctx context.Context, msgs []Message, progress func(chars i
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", Usage{}, fmt.Errorf("请求 AI 接口失败: %w", err)
+		return nil, fmt.Errorf("请求 AI 接口失败: %w", err)
+	}
+	return resp, nil
+}
+
+// completionStream reads single-line data events from compatible APIs.
+type completionStream struct {
+	*bufio.Scanner
+}
+
+func newCompletionStream(r io.Reader) completionStream {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 4<<20)
+	return completionStream{sc}
+}
+
+func (sc completionStream) next() (string, bool) {
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			return "", false
+		}
+		return data, true
+	}
+	return "", false
+}
+
+// Chat sends messages and returns the full reply. progress, when non-nil, is
+// called with the number of characters received so far (reasoning included)
+// while the reply streams in.
+func (c *Client) Chat(ctx context.Context, msgs []Message, progress func(chars int)) (string, Usage, error) {
+	if strings.TrimSpace(c.BaseURL) == "" || strings.TrimSpace(c.Model) == "" {
+		return "", Usage{}, errors.New("AI 接口地址和模型名不能为空")
+	}
+	body, _ := json.Marshal(chatRequest{Model: c.Model, Messages: msgs, Stream: true, Temperature: 0.3})
+	resp, err := c.postCompletion(ctx, body)
+	if err != nil {
+		return "", Usage{}, err
 	}
 	defer resp.Body.Close()
 
@@ -144,17 +178,8 @@ func readStream(r io.Reader, progress func(int)) (string, Usage, error) {
 	var out strings.Builder
 	var u Usage
 	chars, finish := 0, ""
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 4<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			break
-		}
+	sc := newCompletionStream(r)
+	for data, ok := sc.next(); ok; data, ok = sc.next() {
 		var cr chatResponse
 		if err := json.Unmarshal([]byte(data), &cr); err != nil {
 			continue

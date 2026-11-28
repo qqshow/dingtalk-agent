@@ -166,17 +166,18 @@ func (s *Syncer) run() error {
 	if err != nil {
 		return err
 	}
-	stats := snap.Stats()
+	latest := snap.LatestMessageTime()
+	latestStr := store.FormatTS(latest)
 	s.mu.Lock()
-	s.state.LastSyncTime = stats.LatestMessageTime
+	s.state.LastSyncTime = latest
 	s.state.LastSyncTimeStr = time.Now().Format(time.DateTime)
-	s.state.LatestMessageStr = stats.LatestMessageStr
+	s.state.LatestMessageStr = latestStr
 	s.state.SyncCount++
 	s.state.LastDurationMS = time.Since(start).Milliseconds()
 	s.state.SnapshotFile = filepath.Base(res.Path)
 	s.mu.Unlock()
 	slog.Info("sync complete", "duration", time.Since(start).Round(time.Millisecond),
-		"wal_frames", res.WALFrames, "latest_message", stats.LatestMessageStr)
+		"wal_frames", res.WALFrames, "latest_message", latestStr)
 	return nil
 }
 

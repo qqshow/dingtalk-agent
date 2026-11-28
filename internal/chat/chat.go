@@ -21,6 +21,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/app"
 	"github.com/qqshow/dingtalk-agent/internal/mcp"
 	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 )
 
 const (
@@ -597,13 +598,7 @@ func mentionContext(snap *store.Snapshot, keys []string, days int, now time.Time
 
 // ------------------------------------------------------------- display
 
-func titleOf(text string) string {
-	t := strings.Join(strings.Fields(text), " ")
-	if r := []rune(t); len(r) > 30 {
-		t = string(r[:30]) + "…"
-	}
-	return t
-}
+func titleOf(text string) string { return textutil.Snippet(text, 30) }
 
 // describeCall turns a tool call into a short human description.
 func describeCall(snap *store.Snapshot, name, rawArgs string) string {

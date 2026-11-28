@@ -124,10 +124,14 @@ func (s *Store) Snapshot() (*Snapshot, error) {
 	old := s.cur.Swap(snap)
 	if old != nil {
 		// Let in-flight requests finish before closing the old pool.
+		db, cal, path := old.DB, old.Cal, old.Path
 		time.AfterFunc(30*time.Second, func() {
-			old.close()
-			os.Remove(old.Path)
-			os.Remove(calendarPathFor(old.Path))
+			db.Close()
+			if cal != nil {
+				cal.Close()
+			}
+			os.Remove(path)
+			os.Remove(calendarPathFor(path))
 		})
 	}
 	slog.Info("snapshot loaded", "path", filepath.Base(path), "conversations", len(snap.Convs),
@@ -153,13 +157,6 @@ type Snapshot struct {
 
 	lastOnce sync.Once
 	lastMsgs map[string]LastMsg
-}
-
-func (s *Snapshot) close() {
-	s.DB.Close()
-	if s.Cal != nil {
-		s.Cal.Close()
-	}
 }
 
 // calendarPathFor maps dingtalk_<ts>.db to its calendar_<ts>.db sibling.
