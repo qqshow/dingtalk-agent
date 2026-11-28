@@ -10,6 +10,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/agentdb"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 )
 
 type Tool struct {
@@ -230,25 +231,7 @@ func (s *Server) buildTools() []Tool {
 				kindName := map[string]string{"meeting": "会议", "approval_todo": "审批待办", "ai_minutes": "AI听记", "task": "任务", "leave": "请假"}
 				for _, e := range res.Events {
 					fmt.Fprintf(&b, "- [%s] %s %s", kindName[e.Kind], e.TimeRange(multi), e.Subject)
-					var meta []string
-					if e.MeetingRoom != "" {
-						meta = append(meta, e.MeetingRoom)
-					} else if e.Location != "" {
-						meta = append(meta, e.Location)
-					}
-					if e.HasVideo {
-						meta = append(meta, "视频会议")
-					}
-					if e.Kind == "meeting" {
-						if e.IOrganized {
-							meta = append(meta, "我组织")
-						} else if e.Organizer != "" {
-							meta = append(meta, "组织者 "+e.Organizer)
-						}
-						if e.MyResponse == "no_response" && !e.IOrganized {
-							meta = append(meta, "我未回复邀请")
-						}
-					}
+					meta := analysis.EventMetadata(e)
 					if e.Status != "normal" && e.Status != "" {
 						meta = append(meta, map[string]string{"cancelled": "已取消", "done": "已完成",
 							"in_progress": "处理中", "open": "未处理"}[e.Status])
@@ -257,7 +240,7 @@ func (s *Server) buildTools() []Tool {
 						b.WriteString("（" + strings.Join(meta, "，") + "）")
 					}
 					if e.Comment != "" {
-						b.WriteString("\n  备注：" + truncate(e.Comment, 500))
+						b.WriteString("\n  备注：" + textutil.Snippet(e.Comment, 500))
 					}
 					b.WriteString("\n")
 				}
@@ -300,7 +283,7 @@ func (s *Server) buildTools() []Tool {
 				fmt.Fprintf(&b, "找到 %d 条（最多显示 %d）\n", len(msgs), q.Limit)
 				for _, m := range msgs {
 					fmt.Fprintf(&b, "- %s [%s] %s: %s  (cid=%s)\n", cut(m.CreatedAtStr, 0, 16), snap.ConvTitle(m.CID),
-						m.SenderName, truncate(m.AgentText(), 300), m.CID)
+						m.SenderName, textutil.Snippet(m.AgentText(), 300), m.CID)
 				}
 				return b.String(), nil
 			},
@@ -439,15 +422,6 @@ func (s *Server) buildTools() []Tool {
 			},
 		},
 	}
-}
-
-func truncate(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
 }
 
 func cut(s string, a, b int) string {

@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/qqshow/dingtalk-agent/internal/chat"
-	"github.com/qqshow/dingtalk-agent/internal/store"
 )
 
 func pathID(r *http.Request) (int64, error) {
@@ -121,16 +120,7 @@ func (s *Server) apiChatPeople(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only people we have no single chat with: the page already lists
 	// single chats from the conversation list.
-	out := []store.Person{}
-	for _, p := range snap.SearchPeople(q, 100000) {
-		if p.CID == "" {
-			out = append(out, p)
-			if len(out) == limit {
-				break
-			}
-		}
-	}
-	writeJSON(w, 200, map[string]any{"people": out})
+	writeJSON(w, 200, map[string]any{"people": snap.SearchPeopleWithoutChat(q, limit)})
 }
 
 // apiChatSend answers a message as a server-sent event stream. Closing the

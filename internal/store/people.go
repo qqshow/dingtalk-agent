@@ -28,6 +28,15 @@ func (s *Snapshot) SingleCIDFor(uid int64) string {
 // contains q. People we have a single chat with come first, then names that
 // start with q.
 func (s *Snapshot) SearchPeople(q string, limit int) []Person {
+	return s.searchPeople(q, limit, false)
+}
+
+// SearchPeopleWithoutChat finds matching contacts without a single chat.
+func (s *Snapshot) SearchPeopleWithoutChat(q string, limit int) []Person {
+	return s.searchPeople(q, limit, true)
+}
+
+func (s *Snapshot) searchPeople(q string, limit int, withoutChat bool) []Person {
 	q = strings.ToLower(strings.TrimSpace(q))
 	if limit <= 0 {
 		limit = 20
@@ -48,7 +57,7 @@ func (s *Snapshot) SearchPeople(q string, limit int) []Person {
 	}
 	var hits []hit
 	for uid, u := range s.Users {
-		if uid == s.MyUID || u.IsBot() {
+		if uid == s.MyUID || u.IsBot() || (withoutChat && single[uid] != nil && single[uid].CID != "") {
 			continue
 		}
 		name := u.Name()

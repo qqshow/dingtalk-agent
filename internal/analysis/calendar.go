@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 )
 
 // CalendarSection is the calendar part of the daily report.
@@ -59,9 +60,8 @@ func BuildCalendar(s *store.Snapshot, p Period) CalendarSection {
 	return c
 }
 
-func eventLine(e store.Event, withDate bool) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "- %s %s", e.TimeRange(withDate), e.Subject)
+// EventMetadata describes the location and meeting details shared by calendar views.
+func EventMetadata(e store.Event) []string {
 	var meta []string
 	if e.MeetingRoom != "" {
 		meta = append(meta, e.MeetingRoom)
@@ -71,8 +71,7 @@ func eventLine(e store.Event, withDate bool) string {
 	if e.HasVideo {
 		meta = append(meta, "视频会议")
 	}
-	switch e.Kind {
-	case "meeting":
+	if e.Kind == "meeting" {
 		if e.IOrganized {
 			meta = append(meta, "我组织")
 		} else if e.Organizer != "" {
@@ -81,6 +80,15 @@ func eventLine(e store.Event, withDate bool) string {
 		if e.MyResponse == "no_response" && !e.IOrganized {
 			meta = append(meta, "我未回复邀请")
 		}
+	}
+	return meta
+}
+
+func eventLine(e store.Event, withDate bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "- %s %s", e.TimeRange(withDate), e.Subject)
+	meta := EventMetadata(e)
+	switch e.Kind {
 	case "leave":
 		meta = append(meta, "请假")
 	case "ai_minutes":
@@ -92,7 +100,7 @@ func eventLine(e store.Event, withDate bool) string {
 		b.WriteString("（" + strings.Join(meta, "，") + "）")
 	}
 	if e.Comment != "" {
-		b.WriteString("\n  备注：" + snippet(e.Comment, 300))
+		b.WriteString("\n  备注：" + textutil.Snippet(e.Comment, 300))
 	}
 	b.WriteString("\n")
 	return b.String()

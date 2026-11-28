@@ -293,26 +293,26 @@ func fileExists(p string) bool {
 }
 
 // resolveLocal picks the first existing candidate path and sets availability.
-func resolveLocal(a *Attachment, candidates []string) {
-	fpath := ""
+func resolveLocal(a *Attachment, candidates ...string) {
 	for _, p := range candidates {
 		if fileExists(p) {
-			fpath = p
-			break
+			a.LocalPath = p
+			a.LocalAvailable = boolPtr(true)
+			return
 		}
 	}
-	if fpath == "" && len(candidates) > 0 {
-		fpath = candidates[0]
+	a.LocalAvailable = boolPtr(false)
+}
+
+func decodeAttachment(att, ext map[string]any, fromColumn bool, byName map[string]string) Attachment {
+	a := Attachment{Type: sqlitex.Int(att["type"]), URL: sqlitex.Str(att["url"]), Size: sqlitex.Int(att["size"])}
+	a.Filename = sqlitex.Str(ext["f_name"])
+	if a.Filename != "" || (fromColumn && a.Type == CTFile) {
+		a.FileSize = sqlitex.Int(ext["f_size"])
+		a.FileType = sqlitex.Str(ext["f_type"])
+		resolveLocal(&a, sqlitex.Str(ext["path"]), sqlitex.Str(att["filepath"]), byName[a.Filename])
 	}
-	if fpath != "" && !strings.HasPrefix(fpath, `\\`) {
-		ok := fileExists(fpath)
-		a.LocalAvailable = boolPtr(ok)
-		if ok {
-			a.LocalPath = fpath
-		}
-	} else {
-		a.LocalAvailable = boolPtr(false)
-	}
+	return a
 }
 
 func parseAttachments(raw string, content map[string]any) []Attachment {
@@ -337,20 +337,7 @@ func parseAttachments(raw string, content map[string]any) []Attachment {
 			for _, item := range list {
 				att := asMap(item)
 				ext := asMap(att["extension"])
-				a := Attachment{Type: sqlitex.Int(att["type"]), URL: sqlitex.Str(att["url"]), Size: sqlitex.Int(att["size"])}
-				if a.Type == CTFile || sqlitex.Str(ext["f_name"]) != "" {
-					a.Filename = sqlitex.Str(ext["f_name"])
-					a.FileSize = sqlitex.Int(ext["f_size"])
-					a.FileType = sqlitex.Str(ext["f_type"])
-					var cands []string
-					for _, p := range []string{sqlitex.Str(ext["path"]), sqlitex.Str(att["filepath"]), byName[a.Filename]} {
-						if p != "" {
-							cands = append(cands, p)
-						}
-					}
-					resolveLocal(&a, cands)
-				}
-				out = append(out, a)
+				out = append(out, decodeAttachment(att, ext, true, byName))
 			}
 		}
 	}
@@ -359,19 +346,7 @@ func parseAttachments(raw string, content map[string]any) []Attachment {
 		for _, item := range contentAtts {
 			att := asMap(item)
 			ext := asMap(att["extension"])
-			a := Attachment{Type: sqlitex.Int(att["type"]), URL: sqlitex.Str(att["url"]), Size: sqlitex.Int(att["size"])}
-			if n := sqlitex.Str(ext["f_name"]); n != "" {
-				a.Filename = n
-				a.FileSize = sqlitex.Int(ext["f_size"])
-				a.FileType = sqlitex.Str(ext["f_type"])
-				var cands []string
-				for _, p := range []string{sqlitex.Str(ext["path"]), sqlitex.Str(att["filepath"])} {
-					if p != "" {
-						cands = append(cands, p)
-					}
-				}
-				resolveLocal(&a, cands)
-			}
+			a := decodeAttachment(att, ext, false, nil)
 			if md := sqlitex.Str(ext["markdown"]); md != "" {
 				a.Markdown = truncRunes(md, 500)
 			}

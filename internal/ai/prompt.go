@@ -7,6 +7,7 @@ import (
 	"github.com/qqshow/dingtalk-agent/internal/agentdb"
 	"github.com/qqshow/dingtalk-agent/internal/analysis"
 	"github.com/qqshow/dingtalk-agent/internal/store"
+	"github.com/qqshow/dingtalk-agent/internal/textutil"
 )
 
 const dailySystem = `你是用户的工作助理。用户会给你他某一天的钉钉工作数据（统计、日程、与他相关的聊天记录摘要）以及他现有的未完成事项。
@@ -94,18 +95,9 @@ func todoLine(t agentdb.Todo) string {
 	}
 	line := fmt.Sprintf("- [#%d] %s（%s）", t.ID, t.Title, strings.Join(meta, "，"))
 	if d := strings.TrimSpace(t.Detail); d != "" {
-		line += "\n  " + snippet(d, 160)
+		line += "\n  " + textutil.Snippet(d, 160)
 	}
 	return line
-}
-
-func snippet(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
 }
 
 // dailyUserPrompt is the data part of the daily request.
